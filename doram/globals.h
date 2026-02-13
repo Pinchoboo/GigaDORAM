@@ -111,5 +111,7 @@ BristolFashion_array *prf_circuit = nullptr;
 BristolFashion_array *replace_if_dummy_circuit_file[32];
 BristolFashion_array *dummy_check_circuit_file[32];
 BristolFashion_array *compare_swap_circuit_file = nullptr;
+BristolFashion_array *b2a_circuit_file = nullptr;
+BristolFashion_array *a2b_circuit_file = nullptr;
 
 } // namespace emp
