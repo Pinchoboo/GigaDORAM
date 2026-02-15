@@ -27,6 +27,13 @@ template <> inline bool getBit(const block &x, uint i)
     // compiler should optimize the power of two divisions and mod
     return (data[i / 64] >> (i % 64)) & 1;
 }
+
+template <> inline bool getBit(const y_type &x, uint i)
+{
+    assert(Y_TYPE_BITS > i);
+    return (x.data[i / 8] >> (i % 8)) & 1;
+}
+
 template <typename T>                    // todo could probably be written better, makign it work...
 inline void setBit(T &x, uint i, bool b) //! I must have written the same code in like a billion places
 {
@@ -40,6 +47,16 @@ template <> inline void setBit(block &x, uint i, bool b)
     uint64_t *data = (uint64_t *)&x;
     uint64_t mask = 1ULL << (i % 64);
     data[i / 64] = (data[i / 64] | mask) ^ (mask * !b);
+}
+
+template <> inline void setBit(y_type &x, uint i, bool b)
+{
+    assert(Y_TYPE_BITS > i);
+    uint8_t mask = static_cast<uint8_t>(1u << (i % 8));
+    if (b)
+        x.data[i / 8] |= mask;
+    else
+        x.data[i / 8] &= static_cast<uint8_t>(~mask);
 }
 
 template <typename T> inline bool getBitArr(const T *x, uint i)

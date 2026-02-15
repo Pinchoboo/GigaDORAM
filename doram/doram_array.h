@@ -560,20 +560,30 @@ private:
 
         if (!had_initial_bottom_level)
         {
+            // Create wider sort array: each element is BLOCKS_PER_PACKED_XY blocks
+            //   layout: is_dummy(4B) | x(4B) | y(Y_TYPE_BYTES) | padding
+            rep_array_unsliced<block> sort_array(num_extracted * BLOCKS_PER_PACKED_XY);
             for (uint i = 0; i < num_extracted; i++) {
-                cleanse_bottom_level_circuit_output.copy_bytes_from(extracted_list_xs, 4, 4 * i, 16 * i + 4);
-                cleanse_bottom_level_circuit_output.copy_bytes_from(extracted_list_ys, 8, 8 * i, 16 * i + 8);
+                // Copy is_dummy result from dummy_check output (first sizeof(x_type) bytes)
+                sort_array.copy_bytes_from(cleanse_bottom_level_circuit_output, sizeof(x_type),
+                    i * sizeof(block), i * PACKED_XY_STRIDE);
+                // Copy x address
+                sort_array.copy_bytes_from(extracted_list_xs, sizeof(x_type),
+                    sizeof(x_type) * i, i * PACKED_XY_STRIDE + sizeof(x_type));
+                // Copy y data
+                sort_array.copy_bytes_from(extracted_list_ys, sizeof(y_type),
+                    sizeof(y_type) * i, i * PACKED_XY_STRIDE + 2 * sizeof(x_type));
             }
-            // cleanse_bottom_level_circuit_output.debug_print("before sort");
-            batcher::sort<block>(compare_swap_circuit_file, cleanse_bottom_level_circuit_output);
-            // cleanse_bottom_level_circuit_output.debug_print("after sort");
+            batcher::sort<block>(compare_swap_circuit_file, sort_array, BLOCKS_PER_PACKED_XY);
             uint num_to_extract = cleansed_for_bottom_level_xs.length_Ts();
             for (uint i = 0; i < num_to_extract; i++) {
-                cleansed_for_bottom_level_xs.copy_bytes_from(cleanse_bottom_level_circuit_output, 4, 16 * i + 4, 4 * i);
-                cleansed_for_bottom_level_ys.copy_bytes_from(cleanse_bottom_level_circuit_output, 8, 16 * i + 8, 8 * i);
+                cleansed_for_bottom_level_xs.copy_bytes_from(sort_array, sizeof(x_type),
+                    i * PACKED_XY_STRIDE + sizeof(x_type), sizeof(x_type) * i);
+                cleansed_for_bottom_level_ys.copy_bytes_from(sort_array, sizeof(y_type),
+                    i * PACKED_XY_STRIDE + 2 * sizeof(x_type), sizeof(y_type) * i);
             }
+            sort_array.destroy();
             relabel_dummies(cleansed_for_bottom_level_xs, log_N);
-            // cleansed_for_bottom_level_xs.debug_print("after relabel");
         }
         else {
             // this is a 128x inefficiency in output size
