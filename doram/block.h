@@ -30,7 +30,7 @@ template <> inline bool getBit(const block &x, uint i)
 
 template <> inline bool getBit(const y_type &x, uint i)
 {
-    assert(Y_TYPE_BITS > i);
+    assert(get_y_type_bits() > i);
     return (x.data[i / 8] >> (i % 8)) & 1;
 }
 
@@ -51,7 +51,7 @@ template <> inline void setBit(block &x, uint i, bool b)
 
 template <> inline void setBit(y_type &x, uint i, bool b)
 {
-    assert(Y_TYPE_BITS > i);
+    assert(get_y_type_bits() > i);
     uint8_t mask = static_cast<uint8_t>(1u << (i % 8));
     if (b)
         x.data[i / 8] |= mask;

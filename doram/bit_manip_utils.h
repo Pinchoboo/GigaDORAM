@@ -1,6 +1,7 @@
 //! should only be included internally by utils
 
 #pragma once
+#include "globals.h"
 
 typedef uint32_t uint;
 
@@ -69,6 +70,36 @@ template <typename T> T get_all_ones_rightshifted_by(uint shift) {
     T mask = get_all_ones_of_type<T>();
     for (uint i = 0; i < shift; i++) {
         mask ^= get_all_zero_except_nth_from_highest<T>(i);
+    }
+    return mask;
+}
+
+template <> inline emp::y_type get_all_ones_of_type<emp::y_type>() {
+    emp::y_type all_ones;
+    memset(&all_ones, 0, sizeof(emp::y_type));
+    const uint n = emp::get_y_type_bytes();
+    memset(&all_ones, 255, n);
+    return all_ones;
+}
+
+template <> inline emp::y_type get_one_hot_mask<emp::y_type>(uint set_bit_index) {
+    assert(set_bit_index < emp::get_y_type_bits());
+    emp::y_type mask;
+    memset(&mask, 0, sizeof(emp::y_type));
+    mask.data[set_bit_index / 8] |= static_cast<uint8_t>(1u << (set_bit_index % 8));
+    return mask;
+}
+
+template <> inline emp::y_type get_all_zero_except_nth_from_highest<emp::y_type>(uint n) {
+    assert(n < emp::get_y_type_bits());
+    return get_one_hot_mask<emp::y_type>(emp::get_y_type_bits() - 1 - n);
+}
+
+template <> inline emp::y_type get_all_ones_rightshifted_by<emp::y_type>(uint shift) {
+    assert(shift <= emp::get_y_type_bits());
+    emp::y_type mask = get_all_ones_of_type<emp::y_type>();
+    for (uint i = 0; i < shift; i++) {
+        mask ^= get_all_zero_except_nth_from_highest<emp::y_type>(i);
     }
     return mask;
 }

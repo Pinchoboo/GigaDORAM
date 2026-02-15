@@ -105,87 +105,120 @@ typedef unsigned long long ull;
 typedef uint32_t x_type;
 
 // ---------------------------------------------------------------------------
-// y_type: compile-time configurable wide data type for ORAM slots.
-// Override Y_TYPE_BITS at compile time (e.g. -DY_TYPE_BITS=272) to widen.
-// Default: 64 bits (backward-compatible with original uint64_t y_type).
+// y_type: maximum compile-time width with runtime-selectable active width.
+// Override Y_TYPE_BITS at compile time to set the maximum allowed width.
 // ---------------------------------------------------------------------------
 #ifndef Y_TYPE_BITS
 #define Y_TYPE_BITS 64
 #endif
-#define Y_TYPE_BYTES ((Y_TYPE_BITS + 7) / 8)
+#define Y_TYPE_MAX_BITS Y_TYPE_BITS
+#define Y_TYPE_MAX_BYTES ((Y_TYPE_MAX_BITS + 7) / 8)
+
+inline uint32_t active_y_type_bits = Y_TYPE_MAX_BITS;
+inline uint32_t active_y_type_bytes = Y_TYPE_MAX_BYTES;
+
+inline uint32_t get_y_type_bits() {
+    return active_y_type_bits;
+}
+
+inline uint32_t get_y_type_bytes() {
+    return active_y_type_bytes;
+}
+
+inline void set_y_type_bits(uint32_t bits) {
+    assert(bits > 0);
+    assert((bits % 8) == 0);
+    assert(bits <= Y_TYPE_MAX_BITS);
+    active_y_type_bits = bits;
+    active_y_type_bytes = bits / 8;
+}
 
 struct y_type {
-    uint8_t data[Y_TYPE_BYTES];
+    uint8_t data[Y_TYPE_MAX_BYTES];
 
     // Default: zero
-    y_type() { memset(data, 0, Y_TYPE_BYTES); }
+    y_type() { memset(data, 0, Y_TYPE_MAX_BYTES); }
 
     // Implicit conversion from uint64_t (little-endian)
     y_type(uint64_t val) {
-        memset(data, 0, Y_TYPE_BYTES);
-        for (size_t i = 0; i < sizeof(val) && i < Y_TYPE_BYTES; i++)
+        memset(data, 0, Y_TYPE_MAX_BYTES);
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < sizeof(val) && i < n; i++)
             data[i] = static_cast<uint8_t>(val >> (i * 8));
     }
 
     // Bitwise XOR
     y_type operator^(const y_type& o) const {
         y_type r;
-        for (int i = 0; i < Y_TYPE_BYTES; i++) r.data[i] = data[i] ^ o.data[i];
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < n; i++) r.data[i] = data[i] ^ o.data[i];
         return r;
     }
     y_type& operator^=(const y_type& o) {
-        for (int i = 0; i < Y_TYPE_BYTES; i++) data[i] ^= o.data[i];
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < n; i++) data[i] ^= o.data[i];
         return *this;
     }
 
     // Bitwise OR
     y_type operator|(const y_type& o) const {
         y_type r;
-        for (int i = 0; i < Y_TYPE_BYTES; i++) r.data[i] = data[i] | o.data[i];
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < n; i++) r.data[i] = data[i] | o.data[i];
         return r;
     }
     y_type& operator|=(const y_type& o) {
-        for (int i = 0; i < Y_TYPE_BYTES; i++) data[i] |= o.data[i];
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < n; i++) data[i] |= o.data[i];
         return *this;
     }
 
     // Bitwise AND
     y_type operator&(const y_type& o) const {
         y_type r;
-        for (int i = 0; i < Y_TYPE_BYTES; i++) r.data[i] = data[i] & o.data[i];
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < n; i++) r.data[i] = data[i] & o.data[i];
         return r;
     }
     y_type& operator&=(const y_type& o) {
-        for (int i = 0; i < Y_TYPE_BYTES; i++) data[i] &= o.data[i];
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < n; i++) data[i] &= o.data[i];
         return *this;
     }
 
     // Comparison
-    bool operator==(const y_type& o) const { return memcmp(data, o.data, Y_TYPE_BYTES) == 0; }
+    bool operator==(const y_type& o) const {
+        const size_t n = get_y_type_bytes();
+        return memcmp(data, o.data, n) == 0;
+    }
     bool operator!=(const y_type& o) const { return !(*this == o); }
 
     // Extract the low 64 bits as uint64_t (for B2A/A2B which stay 64-bit)
     uint64_t to_u64() const {
         uint64_t v = 0;
-        for (size_t i = 0; i < sizeof(v) && i < Y_TYPE_BYTES; i++)
+        const size_t n = get_y_type_bytes();
+        for (size_t i = 0; i < sizeof(v) && i < n; i++)
             v |= static_cast<uint64_t>(data[i]) << (i * 8);
         return v;
     }
 };
 
 // Packed element layout used by xy_if_xs_equal and compare_swap circuits:
-//   [x_type (4B)] [x_type (4B)] [y_type (Y_TYPE_BYTES)] [padding to block boundary]
-// Number of bytes of payload:
-constexpr uint PACKED_XY_BYTES = 2 * sizeof(x_type) + Y_TYPE_BYTES;
-// Number of 128-bit blocks per packed element:
-constexpr uint BLOCKS_PER_PACKED_XY = (PACKED_XY_BYTES + sizeof(block) - 1) / sizeof(block);
-// Byte stride per packed element (aligned to block boundary):
-constexpr uint PACKED_XY_STRIDE = BLOCKS_PER_PACKED_XY * sizeof(block);
+//   [x_type (4B)] [x_type (4B)] [y_type (active_y_type_bytes)] [padding]
+inline uint packed_xy_bytes() {
+    return 2 * sizeof(x_type) + get_y_type_bytes();
+}
+inline uint blocks_per_packed_xy() {
+    return (packed_xy_bytes() + sizeof(block) - 1) / sizeof(block);
+}
+inline uint packed_xy_stride() {
+    return blocks_per_packed_xy() * sizeof(block);
+}
 
 // Stream output for debugging
 inline std::ostream& operator<<(std::ostream& os, const y_type& v) {
     os << "0x";
-    for (int i = Y_TYPE_BYTES - 1; i >= 0; i--) {
+    for (int i = static_cast<int>(get_y_type_bytes()) - 1; i >= 0; i--) {
         char buf[3];
         snprintf(buf, sizeof(buf), "%02x", v.data[i]);
         os << buf;

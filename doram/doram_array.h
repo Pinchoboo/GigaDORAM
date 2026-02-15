@@ -560,27 +560,30 @@ private:
 
         if (!had_initial_bottom_level)
         {
+            const uint blocks_per_elem = blocks_per_packed_xy();
+            const uint elem_stride = packed_xy_stride();
+            const uint y_bytes = get_y_type_bytes();
             // Create wider sort array: each element is BLOCKS_PER_PACKED_XY blocks
             //   layout: is_dummy(4B) | x(4B) | y(Y_TYPE_BYTES) | padding
-            rep_array_unsliced<block> sort_array(num_extracted * BLOCKS_PER_PACKED_XY);
+            rep_array_unsliced<block> sort_array(num_extracted * blocks_per_elem);
             for (uint i = 0; i < num_extracted; i++) {
                 // Copy is_dummy result from dummy_check output (first sizeof(x_type) bytes)
                 sort_array.copy_bytes_from(cleanse_bottom_level_circuit_output, sizeof(x_type),
-                    i * sizeof(block), i * PACKED_XY_STRIDE);
+                    i * sizeof(block), i * elem_stride);
                 // Copy x address
                 sort_array.copy_bytes_from(extracted_list_xs, sizeof(x_type),
-                    sizeof(x_type) * i, i * PACKED_XY_STRIDE + sizeof(x_type));
+                    sizeof(x_type) * i, i * elem_stride + sizeof(x_type));
                 // Copy y data
-                sort_array.copy_bytes_from(extracted_list_ys, sizeof(y_type),
-                    sizeof(y_type) * i, i * PACKED_XY_STRIDE + 2 * sizeof(x_type));
+                sort_array.copy_bytes_from(extracted_list_ys, y_bytes,
+                    sizeof(y_type) * i, i * elem_stride + 2 * sizeof(x_type));
             }
-            batcher::sort<block>(compare_swap_circuit_file, sort_array, BLOCKS_PER_PACKED_XY);
+            batcher::sort<block>(compare_swap_circuit_file, sort_array, blocks_per_elem);
             uint num_to_extract = cleansed_for_bottom_level_xs.length_Ts();
             for (uint i = 0; i < num_to_extract; i++) {
                 cleansed_for_bottom_level_xs.copy_bytes_from(sort_array, sizeof(x_type),
-                    i * PACKED_XY_STRIDE + sizeof(x_type), sizeof(x_type) * i);
-                cleansed_for_bottom_level_ys.copy_bytes_from(sort_array, sizeof(y_type),
-                    i * PACKED_XY_STRIDE + 2 * sizeof(x_type), sizeof(y_type) * i);
+                    i * elem_stride + sizeof(x_type), sizeof(x_type) * i);
+                cleansed_for_bottom_level_ys.copy_bytes_from(sort_array, y_bytes,
+                    i * elem_stride + 2 * sizeof(x_type), sizeof(y_type) * i);
             }
             sort_array.destroy();
             relabel_dummies(cleansed_for_bottom_level_xs, log_N);
@@ -672,7 +675,7 @@ private:
         {
             // this is not wrong because we're using y_accum (not y)
             // so won't be reset to 0 if not found at level after found
-            y_accum.extract_bit_xor(sizeof(y_type) * 8 - 1 - i, alibi_mask.window(i, 1));
+            y_accum.extract_bit_xor(get_y_type_bits() - 1 - i, alibi_mask.window(i, 1));
         }
     }
 
