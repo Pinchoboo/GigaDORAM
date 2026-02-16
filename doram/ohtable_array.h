@@ -59,21 +59,22 @@ ostream& operator<<(ostream& stream, const OHTableParams& params) {
     return stream << "}\n";
 }
 
-class OHTable_array
+template <typename YType>
+class OHTableArrayT
 {
     // change to private after debuggine
 public:
     OHTableParams params;
     rep_array_unsliced<block> key;
     rep_array_unsliced<x_type> stash_xs;
-    rep_array_unsliced<y_type> stash_ys;
+    rep_array_unsliced<YType> stash_ys;
 private:
     rep_array_unsliced<block> qs_builder_order;
     rep_array_unsliced<x_type> xs_builder_order;
-    rep_array_unsliced<y_type> ys_builder_order;
+    rep_array_unsliced<YType> ys_builder_order;
     rep_array_unsliced<uint> dummy_indices;
     rep_array_unsliced<x_type> xs_receiver_order;
-    rep_array_unsliced<y_type> ys_receiver_order;
+    rep_array_unsliced<YType> ys_receiver_order;
     block* cht_2shares;
     LocalPermutation* receiver_shuffle;
 
@@ -82,8 +83,8 @@ private:
     vector<bool> touched;
 
 public:
-    OHTable_array(const OHTableParams& params,
-    rep_array_unsliced<x_type> xs, rep_array_unsliced<y_type> ys, 
+    OHTableArrayT(const OHTableParams& params,
+    rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys, 
     rep_array_unsliced<block> key)
     :params(params),
     key(key),
@@ -106,7 +107,7 @@ public:
         build(xs, ys);
     }
 
-    ~OHTable_array() {
+    ~OHTableArrayT() {
         key.destroy();
         qs_builder_order.destroy();
         xs_builder_order.destroy();
@@ -116,7 +117,7 @@ public:
         ys_receiver_order.destroy();
     }
 
-    void build(rep_array_unsliced<x_type> xs, rep_array_unsliced<y_type> ys) {
+    void build(rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys) {
         using namespace thread_unsafe;
         // compute qs
         uint prf_input_size_blocks = prf_key_size_blocks() + 1;
@@ -269,7 +270,7 @@ public:
         cht_shares.destroy();
     }
 
-    void query (rep_array_unsliced<block> q, rep_array_unsliced<int> use_dummy, rep_array_unsliced<y_type> y, rep_array_unsliced<int> found) {
+    void query (rep_array_unsliced<block> q, rep_array_unsliced<int> use_dummy, rep_array_unsliced<YType> y, rep_array_unsliced<int> found) {
         using namespace thread_unsafe;
         assert(query_count < params.num_dummies);
         assert(q.length_Ts() == 1);
@@ -319,7 +320,7 @@ public:
         time_after_cht = time_from(start);
     }
 
-    void extract(rep_array_unsliced<x_type> extract_xs, rep_array_unsliced<y_type> extract_ys) {
+    void extract(rep_array_unsliced<x_type> extract_xs, rep_array_unsliced<YType> extract_ys) {
         assert(query_count == params.num_dummies);
         uint num_extracted = 0;
         for (uint i = 0; i < params.total_size(); i++) {
@@ -331,4 +332,5 @@ public:
         assert(num_extracted == params.num_elements - params.stash_size);
     }
 };
+
 }

@@ -105,8 +105,8 @@ typedef unsigned long long ull;
 typedef uint32_t x_type;
 
 // ---------------------------------------------------------------------------
-// y_type: maximum compile-time width with runtime-selectable active width.
-// Override Y_TYPE_BITS at compile time to set the maximum allowed width.
+// y_type: fixed compile-time width.
+// Override Y_TYPE_BITS at compile time to set the maximum width for builds.
 // ---------------------------------------------------------------------------
 #ifndef Y_TYPE_BITS
 #define Y_TYPE_BITS 64
@@ -114,111 +114,148 @@ typedef uint32_t x_type;
 #define Y_TYPE_MAX_BITS Y_TYPE_BITS
 #define Y_TYPE_MAX_BYTES ((Y_TYPE_MAX_BITS + 7) / 8)
 
-inline uint32_t active_y_type_bits = Y_TYPE_MAX_BITS;
-inline uint32_t active_y_type_bytes = Y_TYPE_MAX_BYTES;
+template <size_t FixedBytes>
+struct y_type_t {
+    static_assert(FixedBytes > 0, "y_type_t requires FixedBytes > 0");
+    uint8_t data[FixedBytes];
 
-inline uint32_t get_y_type_bits() {
-    return active_y_type_bits;
-}
+    static inline uint32_t active_bytes() {
+        return static_cast<uint32_t>(FixedBytes);
+    }
 
-inline uint32_t get_y_type_bytes() {
-    return active_y_type_bytes;
-}
-
-inline void set_y_type_bits(uint32_t bits) {
-    assert(bits > 0);
-    assert((bits % 8) == 0);
-    assert(bits <= Y_TYPE_MAX_BITS);
-    active_y_type_bits = bits;
-    active_y_type_bytes = bits / 8;
-}
-
-struct y_type {
-    uint8_t data[Y_TYPE_MAX_BYTES];
+    static inline uint32_t active_bits() {
+        return static_cast<uint32_t>(8 * FixedBytes);
+    }
 
     // Default: zero
-    y_type() { memset(data, 0, Y_TYPE_MAX_BYTES); }
+    y_type_t() : data{} {}
 
     // Implicit conversion from uint64_t (little-endian)
-    y_type(uint64_t val) {
-        memset(data, 0, Y_TYPE_MAX_BYTES);
-        const size_t n = get_y_type_bytes();
+    y_type_t(uint64_t val) : data{} {
+        const size_t n = active_bytes();
         for (size_t i = 0; i < sizeof(val) && i < n; i++)
             data[i] = static_cast<uint8_t>(val >> (i * 8));
     }
 
     // Bitwise XOR
-    y_type operator^(const y_type& o) const {
-        y_type r;
-        const size_t n = get_y_type_bytes();
+    y_type_t operator^(const y_type_t& o) const {
+        y_type_t r;
+        const size_t n = active_bytes();
         for (size_t i = 0; i < n; i++) r.data[i] = data[i] ^ o.data[i];
         return r;
     }
-    y_type& operator^=(const y_type& o) {
-        const size_t n = get_y_type_bytes();
+    y_type_t& operator^=(const y_type_t& o) {
+        const size_t n = active_bytes();
         for (size_t i = 0; i < n; i++) data[i] ^= o.data[i];
         return *this;
     }
 
     // Bitwise OR
-    y_type operator|(const y_type& o) const {
-        y_type r;
-        const size_t n = get_y_type_bytes();
+    y_type_t operator|(const y_type_t& o) const {
+        y_type_t r;
+        const size_t n = active_bytes();
         for (size_t i = 0; i < n; i++) r.data[i] = data[i] | o.data[i];
         return r;
     }
-    y_type& operator|=(const y_type& o) {
-        const size_t n = get_y_type_bytes();
+    y_type_t& operator|=(const y_type_t& o) {
+        const size_t n = active_bytes();
         for (size_t i = 0; i < n; i++) data[i] |= o.data[i];
         return *this;
     }
 
     // Bitwise AND
-    y_type operator&(const y_type& o) const {
-        y_type r;
-        const size_t n = get_y_type_bytes();
+    y_type_t operator&(const y_type_t& o) const {
+        y_type_t r;
+        const size_t n = active_bytes();
         for (size_t i = 0; i < n; i++) r.data[i] = data[i] & o.data[i];
         return r;
     }
-    y_type& operator&=(const y_type& o) {
-        const size_t n = get_y_type_bytes();
+    y_type_t& operator&=(const y_type_t& o) {
+        const size_t n = active_bytes();
         for (size_t i = 0; i < n; i++) data[i] &= o.data[i];
         return *this;
     }
 
     // Comparison
-    bool operator==(const y_type& o) const {
-        const size_t n = get_y_type_bytes();
+    bool operator==(const y_type_t& o) const {
+        const size_t n = active_bytes();
         return memcmp(data, o.data, n) == 0;
     }
-    bool operator!=(const y_type& o) const { return !(*this == o); }
+    bool operator!=(const y_type_t& o) const { return !(*this == o); }
 
     // Extract the low 64 bits as uint64_t (for B2A/A2B which stay 64-bit)
     uint64_t to_u64() const {
         uint64_t v = 0;
-        const size_t n = get_y_type_bytes();
+        const size_t n = active_bytes();
         for (size_t i = 0; i < sizeof(v) && i < n; i++)
             v |= static_cast<uint64_t>(data[i]) << (i * 8);
         return v;
     }
 };
 
-// Packed element layout used by xy_if_xs_equal and compare_swap circuits:
-//   [x_type (4B)] [x_type (4B)] [y_type (active_y_type_bytes)] [padding]
-inline uint packed_xy_bytes() {
-    return 2 * sizeof(x_type) + get_y_type_bytes();
-}
-inline uint blocks_per_packed_xy() {
-    return (packed_xy_bytes() + sizeof(block) - 1) / sizeof(block);
-}
-inline uint packed_xy_stride() {
-    return blocks_per_packed_xy() * sizeof(block);
+using y_type = y_type_t<Y_TYPE_MAX_BYTES>;
+
+static_assert(sizeof(y_type_t<1>) == 1, "y_type_t size mismatch");
+static_assert(sizeof(y_type_t<8>) == 8, "y_type_t size mismatch");
+static_assert(sizeof(y_type_t<16>) == 16, "y_type_t size mismatch");
+static_assert(sizeof(y_type_t<32>) == 32, "y_type_t size mismatch");
+static_assert(sizeof(y_type_t<64>) == 64, "y_type_t size mismatch");
+static_assert(sizeof(y_type_t<128>) == 128, "y_type_t size mismatch");
+
+template <size_t FixedBytes>
+inline constexpr uint32_t y_type_bits_v = static_cast<uint32_t>(8 * FixedBytes);
+
+template <size_t FixedBytes>
+inline constexpr uint32_t y_type_bytes_v = static_cast<uint32_t>(FixedBytes);
+
+template <typename YType>
+inline constexpr uint32_t y_type_bits_of() {
+    return static_cast<uint32_t>(8 * sizeof(YType));
 }
 
+template <typename YType>
+inline constexpr uint32_t y_type_bytes_of() {
+    return static_cast<uint32_t>(sizeof(YType));
+}
+
+// Packed element layout used by xy_if_xs_equal and compare_swap circuits:
+//   [x_type (4B)] [x_type (4B)] [y_type (compile-time bytes)] [padding]
+template <typename YType>
+inline constexpr uint packed_xy_bytes_for() {
+    return 2 * sizeof(x_type) + y_type_bytes_of<YType>();
+}
+template <typename YType>
+inline constexpr uint blocks_per_packed_xy_for() {
+    return (packed_xy_bytes_for<YType>() + sizeof(block) - 1) / sizeof(block);
+}
+template <typename YType>
+inline constexpr uint packed_xy_stride_for() {
+    return blocks_per_packed_xy_for<YType>() * sizeof(block);
+}
+
+static_assert(packed_xy_bytes_for<y_type_t<8>>() == 16, "packed_xy_bytes_for<8> mismatch");
+static_assert(packed_xy_bytes_for<y_type_t<16>>() == 24, "packed_xy_bytes_for<16> mismatch");
+static_assert(packed_xy_bytes_for<y_type_t<32>>() == 40, "packed_xy_bytes_for<32> mismatch");
+static_assert(packed_xy_bytes_for<y_type_t<64>>() == 72, "packed_xy_bytes_for<64> mismatch");
+static_assert(packed_xy_bytes_for<y_type_t<128>>() == 136, "packed_xy_bytes_for<128> mismatch");
+
+static_assert(blocks_per_packed_xy_for<y_type_t<8>>() == 1, "blocks_per_packed_xy_for<8> mismatch");
+static_assert(blocks_per_packed_xy_for<y_type_t<16>>() == 2, "blocks_per_packed_xy_for<16> mismatch");
+static_assert(blocks_per_packed_xy_for<y_type_t<32>>() == 3, "blocks_per_packed_xy_for<32> mismatch");
+static_assert(blocks_per_packed_xy_for<y_type_t<64>>() == 5, "blocks_per_packed_xy_for<64> mismatch");
+static_assert(blocks_per_packed_xy_for<y_type_t<128>>() == 9, "blocks_per_packed_xy_for<128> mismatch");
+
+static_assert(packed_xy_stride_for<y_type_t<8>>() == 16, "packed_xy_stride_for<8> mismatch");
+static_assert(packed_xy_stride_for<y_type_t<16>>() == 32, "packed_xy_stride_for<16> mismatch");
+static_assert(packed_xy_stride_for<y_type_t<32>>() == 48, "packed_xy_stride_for<32> mismatch");
+static_assert(packed_xy_stride_for<y_type_t<64>>() == 80, "packed_xy_stride_for<64> mismatch");
+static_assert(packed_xy_stride_for<y_type_t<128>>() == 144, "packed_xy_stride_for<128> mismatch");
+
 // Stream output for debugging
-inline std::ostream& operator<<(std::ostream& os, const y_type& v) {
+template <size_t FixedBytes>
+inline std::ostream& operator<<(std::ostream& os, const y_type_t<FixedBytes>& v) {
     os << "0x";
-    for (int i = static_cast<int>(get_y_type_bytes()) - 1; i >= 0; i--) {
+    for (int i = static_cast<int>(y_type_t<FixedBytes>::active_bytes()) - 1; i >= 0; i--) {
         char buf[3];
         snprintf(buf, sizeof(buf), "%02x", v.data[i]);
         os << buf;
@@ -226,12 +263,10 @@ inline std::ostream& operator<<(std::ostream& os, const y_type& v) {
     return os;
 }
 
-BristolFashion_array *xy_if_xs_equal_circuit = nullptr;
 BristolFashion_array *cht_lookup_circuit_file = nullptr;
 BristolFashion_array *prf_circuit = nullptr;
 BristolFashion_array *replace_if_dummy_circuit_file[32];
 BristolFashion_array *dummy_check_circuit_file[32];
-BristolFashion_array *compare_swap_circuit_file = nullptr;
 BristolFashion_array *b2a_circuit_file = nullptr;
 BristolFashion_array *a2b_circuit_file = nullptr;
 

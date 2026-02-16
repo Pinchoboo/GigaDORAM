@@ -28,9 +28,9 @@ template <> inline bool getBit(const block &x, uint i)
     return (data[i / 64] >> (i % 64)) & 1;
 }
 
-template <> inline bool getBit(const y_type &x, uint i)
+template <size_t YBytes> inline bool getBit(const y_type_t<YBytes> &x, uint i)
 {
-    assert(get_y_type_bits() > i);
+    assert(y_type_t<YBytes>::active_bits() > i);
     return (x.data[i / 8] >> (i % 8)) & 1;
 }
 
@@ -49,9 +49,9 @@ template <> inline void setBit(block &x, uint i, bool b)
     data[i / 64] = (data[i / 64] | mask) ^ (mask * !b);
 }
 
-template <> inline void setBit(y_type &x, uint i, bool b)
+template <size_t YBytes> inline void setBit(y_type_t<YBytes> &x, uint i, bool b)
 {
-    assert(get_y_type_bits() > i);
+    assert(y_type_t<YBytes>::active_bits() > i);
     uint8_t mask = static_cast<uint8_t>(1u << (i % 8));
     if (b)
         x.data[i / 8] |= mask;
