@@ -1,3 +1,6 @@
+#cache
+circuits/runtime_cache
+
 # Build folder
 build*
 cmake-build-debug*

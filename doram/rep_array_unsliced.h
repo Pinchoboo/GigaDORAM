@@ -209,12 +209,7 @@ void random_data(PRG_t* prev_prg, PRG_t* next_prg) {
 
 inline rep_array_unsliced<T> window_sliced(uint64_t num_slices, uint64_t offset_slices) {
     assert(num_slices + offset_slices <= length_Ts());
-    // using default copy constructor
-    rep_array_unsliced<T> window = *this;
-    window.next += offset_slices;
-    window.prev += offset_slices;
-    window.resize(num_slices);
-    return window;
+    return rep_array_unsliced(prev + offset_slices, next + offset_slices, num_slices);
 }
 
 void f();
@@ -416,4 +411,3 @@ inline void rep_array_unsliced<block>::io_recv_prev(IO_t * prev_io){
 
 
 }
-
