@@ -1,5 +1,6 @@
 #cache
 circuits/runtime_cache
+circuits/.generated_y_type_bits
 
 # Build folder
 build*
