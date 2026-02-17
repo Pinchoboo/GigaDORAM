@@ -7,13 +7,26 @@ Outputs Bits_1 ...
 Inputs Outputs Wire1 Wire2 [Wire3] Type
 ...
 
-circuit input format (1 block)
-x1 | x2 | y
+circuit input format (BLOCKS_PER_PACKED_XY blocks)
+x1 | x2 | y | padding
 
-output format (1 block)
+output format (BLOCKS_PER_PACKED_XY blocks)
 let found = (x1 == x2) in
-x if found | y if found | found | 31b unused 
+x if found | y if found | found | padding
+
+Usage: python xy_if_xs_equal.py [Y_TYPE_BITS]
+  Default Y_TYPE_BITS = 64 (original behavior)
 """
+import sys
+import math
+
+Y_TYPE_BITS = int(sys.argv[1]) if len(sys.argv) > 1 else 64
+X_TYPE_BITS = 32
+# Round up total to 128-bit block boundary
+PACKED_BITS = 2 * X_TYPE_BITS + Y_TYPE_BITS
+TOTAL_BITS = math.ceil(PACKED_BITS / 128) * 128
+NUM_BLOCKS = TOTAL_BITS // 128
+PAD_BITS = TOTAL_BITS - PACKED_BITS
 
 num_wire_used = 0
 gates = []
@@ -41,7 +54,7 @@ def one_input_gate(b1, gate_type):
     for i in range(width):
         gates.append([1,1,b1_start+i, b2_start+i, gate_type])
     return b2
-        
+
 def two_input_gate(b1, b2, gate_type):
     assert gate_type in ("XOR",)
     b1_start, b1_end = b1
@@ -85,7 +98,7 @@ def and_all(b):
     width = width_of(b)
     if width == 1:
         return b
-    mid = (start + end) // 2 
+    mid = (start + end) // 2
     left = (start, mid)
     right = (mid, end)
     left_and_right = mand_gate(left, right)
@@ -94,18 +107,27 @@ def and_all(b):
 def equal(b1, b2):
     return and_all(inv_gate(xor_gate(b1,b2)))
 
-# by using variables, topsort order is enforced!        
-x1 = make_block(32)
-x2 = make_block(32)
-y = make_block(64)
+# by using variables, topsort order is enforced!
+x1 = make_block(X_TYPE_BITS)
+x2 = make_block(X_TYPE_BITS)
+y = make_block(Y_TYPE_BITS)
+if PAD_BITS > 0:
+    _input_pad = make_block(PAD_BITS)
+
 xs_equal = equal(x1, x2)
 output = mand_gate(merge(x2, y), xs_equal)
 found = eqw_gate(xs_equal)
-output_unused = make_block(31)
+# Pad output to same total width
+output_unused_bits = TOTAL_BITS - X_TYPE_BITS - Y_TYPE_BITS - 1
+if output_unused_bits > 0:
+    output_unused = make_block(output_unused_bits)
 
+# Print Bristol Fashion header
 print(len(gates), num_wire_used)
-print(1, 128)
-print(1, 128)
+# Input: NUM_BLOCKS blocks of 128 bits each
+print(NUM_BLOCKS, *([128] * NUM_BLOCKS))
+# Output: NUM_BLOCKS blocks of 128 bits each
+print(NUM_BLOCKS, *([128] * NUM_BLOCKS))
 print("")
 for gate in gates:
     print(" ".join(map(str, gate)))

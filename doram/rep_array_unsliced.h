@@ -30,8 +30,10 @@ public:
         assert(length_Ts > 0);
         prev = new T[length_Ts];
         next = new T[length_Ts];
-        memset(prev, 0, length_bytes);
-        memset(next, 0, length_bytes);
+        for (uint64_t i = 0; i < length_Ts; i++) {
+            prev[i] = T{};
+            next[i] = T{};
+        }
     }
 
     void destroy () {
@@ -62,11 +64,15 @@ void input(int party_inputting, const T *secrets)
     else if (party == prev_party(party_inputting)) {
         //! before this memset() call was added
         //! there was a bug when reusing a rep_array_unsliced by calling input()
-        memset(prev, 0, length_bytes);
+        for (uint64_t i = 0; i < length_Ts(); i++) {
+            prev[i] = T{};
+        }
         next_prg->random_data(next, length_bytes);
     } else {
         prev_io->recv_data(prev, length_bytes);
-        memset(next, 0, length_bytes);
+        for (uint64_t i = 0; i < length_Ts(); i++) {
+            next[i] = T{};
+        }
     }
 }
 
@@ -209,12 +215,7 @@ void random_data(PRG_t* prev_prg, PRG_t* next_prg) {
 
 inline rep_array_unsliced<T> window_sliced(uint64_t num_slices, uint64_t offset_slices) {
     assert(num_slices + offset_slices <= length_Ts());
-    // using default copy constructor
-    rep_array_unsliced<T> window = *this;
-    window.next += offset_slices;
-    window.prev += offset_slices;
-    window.resize(num_slices);
-    return window;
+    return rep_array_unsliced(prev + offset_slices, next + offset_slices, num_slices);
 }
 
 void f();
@@ -416,4 +417,3 @@ inline void rep_array_unsliced<block>::io_recv_prev(IO_t * prev_io){
 
 
 }
-

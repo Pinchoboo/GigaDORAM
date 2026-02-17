@@ -7,16 +7,28 @@ Outputs Bits_1 ...
 Inputs Outputs Wire1 Wire2 [Wire3] Type
 ...
 
-circuit input format (2 blocks)
-A[0:127] || B[0:127]
+circuit input format (2 * BLOCKS_PER_PACKED_XY blocks)
+A[0:ELEMENT_BITS-1] || B[0:ELEMENT_BITS-1]
 
-output format (2 blocks)
+output format (2 * BLOCKS_PER_PACKED_XY blocks)
 if A[0] then
 B || A
 else
 A || B
+
+Usage: python compare_swap.py [Y_TYPE_BITS]
+  Default Y_TYPE_BITS = 64 (original behavior: 128-bit elements)
 """
 import sys
+import math
+
+Y_TYPE_BITS = int(sys.argv[1]) if len(sys.argv) > 1 else 64
+X_TYPE_BITS = 32
+# Element size: 2*x_type + y_type, rounded up to 128-bit boundary
+PACKED_BITS = 2 * X_TYPE_BITS + Y_TYPE_BITS
+ELEMENT_BITS = math.ceil(PACKED_BITS / 128) * 128
+NUM_BLOCKS_PER_ELEMENT = ELEMENT_BITS // 128
+PAD_BITS = ELEMENT_BITS - PACKED_BITS
 
 num_wire_used = 0
 gates = []
@@ -50,7 +62,7 @@ def one_input_gate(b1, gate_type):
     for i in range(width):
         gates.append([1,1,b1_start+i, b2_start+i, gate_type])
     return b2
-        
+
 def two_input_gate(b1, b2, gate_type):
     assert gate_type in ("XOR",)
     b1_start, b1_end = b1
@@ -89,39 +101,22 @@ def xor_gate(b1, b2):
 def mand_gate(b1, b2):
     return multi_gate(b1, b2, "MAND")
 
-def and_all(b):
-    start, end = b
-    width = width_of(b)
-    if width == 1:
-        return b
-    mid = (start + end) // 2 
-    left = (start, mid)
-    right = (mid, end)
-    left_and_right = mand_gate(left, right)
-    return and_all(left_and_right)
-
-def all_zero(b):
-    return and_all(inv_gate(b))
-
-def equal(b1, b2):
-    return all_zero(xor_gate(b1,b2))
-
 # by using variables, topsort order is enforced!
 a0 = make_block(1)
-rest_of_a = make_block(127)
+rest_of_a = make_block(ELEMENT_BITS - 1)
 a = merge(a0, rest_of_a)
-b = make_block(128)
+b = make_block(ELEMENT_BITS)
 
 xor_of_inputs = xor_gate(a, b)
 
-# using mand where width_of(b2) == 0
-swapper = mand_gate(xor_of_inputs, a0) 
+# using mand where width_of(b2) == 1
+swapper = mand_gate(xor_of_inputs, a0)
 output1 = xor_gate(a, swapper)
 output2 = xor_gate(b, swapper)
 
 print(len(gates), num_wire_used)
-print(2, 128, 128)
-print(2, 128, 128)
+print(2 * NUM_BLOCKS_PER_ELEMENT, *([128] * (2 * NUM_BLOCKS_PER_ELEMENT)))
+print(2 * NUM_BLOCKS_PER_ELEMENT, *([128] * (2 * NUM_BLOCKS_PER_ELEMENT)))
 print("")
 for gate in gates:
     print(" ".join(map(str, gate)))

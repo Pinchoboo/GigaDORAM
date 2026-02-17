@@ -33,8 +33,10 @@ public:
         int length_Ss = total_length_Ss();
         prev = new S[length_Ss];
         next = new S[length_Ss]; 
-        memset(prev, 0, length_Ss * sizeof(S));
-        memset(next, 0, length_Ss * sizeof(S));
+        for (int i = 0; i < length_Ss; i++) {
+            prev[i] = S{};
+            next[i] = S{};
+        }
     }
 
     template<typename T>
@@ -54,8 +56,10 @@ public:
         int length_Ss = total_length_Ss();
         prev = new S[length_Ss];
         next = new S[length_Ss]; 
-        memset(prev, 0, length_Ss * sizeof(S));
-        memset(next, 0, length_Ss * sizeof(S));
+        for (int i = 0; i < length_Ss; i++) {
+            prev[i] = S{};
+            next[i] = S{};
+        }
 
         // transpose input in
         auto start = clock_start();

@@ -21,13 +21,15 @@ const bool use_proven_cht_bounds = false;
 
 namespace emp
 {
-class DORAM
+template <typename YType>
+class DORAMT
 {
   public:
-// constructor inits these
+    // constructor inits these
     uint log_address_space_size; 
     uint num_levels; 
     uint log_amp_factor;
+    BristolFashion_array* compare_swap_circuit_local;
     rep_array_unsliced<block> prf_keys;
 
     uint log_sls, stupid_fill_time, stash_size; // params set by testing 
@@ -40,8 +42,8 @@ class DORAM
     //* ohtable levels are 0-indexed: 
     //* first level after stupid level is 0
     //* bottom level is num_levels - 1
-    vector<OHTable_array*> ohtables;
-    StupidLevel *stupid_level; 
+    vector<OHTableArrayT<YType>*> ohtables;
+    StupidLevelT<YType> *stupid_level; 
 
     //?all the other ohtable params: make a struct?
     vector<uint> base_b_state_vec;
@@ -51,13 +53,22 @@ class DORAM
 
     bool had_initial_bottom_level;
 public:
-    DORAM(uint log_address_space_size, rep_array_unsliced<y_type> *ys_no_dummy_room, uint num_levels, uint log_amp_factor)
+    DORAMT(
+        uint log_address_space_size,
+        rep_array_unsliced<YType> *ys_no_dummy_room,
+        uint num_levels,
+        uint log_amp_factor,
+        BristolFashion_array* xy_if_xs_equal_circuit_local,
+        BristolFashion_array* compare_swap_circuit_local)
         : 
         log_address_space_size(log_address_space_size),
         num_levels(num_levels),
         log_amp_factor(log_amp_factor),
+        compare_swap_circuit_local(compare_swap_circuit_local),
         prf_keys(num_levels * prf_key_size_blocks())
     {
+        assert(xy_if_xs_equal_circuit_local != nullptr);
+        assert(this->compare_swap_circuit_local != nullptr);
         // input should be 1 shorter than address space size
         if (ys_no_dummy_room == nullptr) {
             had_initial_bottom_level = false;
@@ -75,7 +86,7 @@ public:
         dbg("initialized DORAM params");
 
         //*init stupid
-        stupid_level = new StupidLevel(1 << log_sls);
+        stupid_level = new StupidLevelT<YType>(1 << log_sls, xy_if_xs_equal_circuit_local);
 
         //*sanity checks
         assert("must have at least 1 level (+ stupid level which is automatically included) in the DORAM!" &&
@@ -118,6 +129,13 @@ public:
     }
 
 private:
+    static inline uint y_type_bits() {
+        return y_type_bits_of<YType>();
+    }
+
+    static inline uint y_type_bytes() {
+        return y_type_bytes_of<YType>();
+    }
 
     void decide_params()
     {
@@ -172,7 +190,7 @@ private:
 
     //*xs and ys must have len data_len+get_num_dummies(data_len)
     // base b should be incremmented on the outside
-    void new_ohtable_of_level(uint level_num, rep_array_unsliced<x_type> xs, rep_array_unsliced<y_type> ys)
+    void new_ohtable_of_level(uint level_num, rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys)
     {
         auto _start = clock_start();
 
@@ -201,7 +219,7 @@ private:
         params.cht_log_single_col_len = get_log_col_len(level_num);
         rep_array_unsliced<block> key = generate_prf_key(level_num);
 
-        OHTable_array* new_ohtable = new OHTable_array(params, xs, ys, key);
+        OHTableArrayT<YType>* new_ohtable = new OHTableArrayT<YType>(params, xs, ys, key);
 
         time_total_builds[level_num] += time_from(_start);
 
@@ -284,7 +302,7 @@ private:
     //? note that xs and ys need be deallocated by caller? (that's the way it is, is it a good practice?, it's
     // different
     // than @ ohtable)
-    ~DORAM()
+    ~DORAMT()
     {
         auto _start = clock_start();
         dbg("destructing DORAM");
@@ -303,7 +321,7 @@ private:
         time_total_deletes += time_from(_start);
     }
 
-    rep_array_unsliced<y_type> read_and_write(rep_array_unsliced<x_type> qry_x, rep_array_unsliced<y_type> qry_y, 
+    rep_array_unsliced<YType> read_and_write(rep_array_unsliced<x_type> qry_x, rep_array_unsliced<YType> qry_y, 
         rep_array_unsliced<int> is_write)
     {
         using namespace thread_unsafe;
@@ -315,7 +333,7 @@ private:
         // Four accumulator variables
         // Alibi mask accumulator
         rep_array_unsliced<int> alibi_mask(num_levels); // reset alibi mask
-        rep_array_unsliced<y_type> y_accum(1);
+        rep_array_unsliced<YType> y_accum(1);
         rep_array_unsliced<int> found(1);
         rep_array_unsliced<int> use_dummy(1);
 
@@ -388,7 +406,7 @@ private:
                 use_dummy.debug_print("use_dummy");
                 alibi_mask.debug_print("alibi_mask");
                 */
-                rep_array_unsliced<y_type> y_returned(1);
+                rep_array_unsliced<YType> y_returned(1);
                 rep_array_unsliced<int> found_returned(1);
                 ohtables[i]->query(prf_output.window(i, 1), use_dummy, y_returned, found_returned);
 
@@ -402,14 +420,14 @@ private:
 
         assert(is_write.length_bytes > 0);
 
-        rep_array_unsliced<y_type> write_y(1);
+        rep_array_unsliced<YType> write_y(1);
         rep_exec->if_then_else(is_write, qry_y, y_accum, write_y);
         // reset alibi mask for this element to 0
-        write_y.apply_and_mask(get_all_ones_rightshifted_by<y_type>(num_levels));
+        write_y.apply_and_mask(get_all_ones_rightshifted_by<YType>(num_levels));
         stupid_level->write(qry_x, write_y);
 
         // reset alibi mask for returned y value as well
-        y_accum.apply_and_mask(get_all_ones_rightshifted_by<y_type>(num_levels));
+        y_accum.apply_and_mask(get_all_ones_rightshifted_by<YType>(num_levels));
 
         time_total_queries += time_from(_start);
         return y_accum;
@@ -465,7 +483,7 @@ private:
                 || tot_num_to_extract == num_elements_at(rebuild_to, base_b_state_vec[rebuild_to] + 1));
 
         rep_array_unsliced<x_type> extracted_list_xs(tot_num_to_extract);
-        rep_array_unsliced<y_type> extracted_list_ys(tot_num_to_extract);
+        rep_array_unsliced<YType> extracted_list_ys(tot_num_to_extract);
 
         uint num_extracted = 0;
 
@@ -500,7 +518,7 @@ private:
             }
 
             rep_array_unsliced<x_type> cleansed_for_bottom_level_xs(num_elements_at(num_levels - 1));
-            rep_array_unsliced<y_type> cleansed_for_bottom_level_ys(num_elements_at(num_levels - 1));
+            rep_array_unsliced<YType> cleansed_for_bottom_level_ys(num_elements_at(num_levels - 1));
 
             cleanse_bottom_level(extracted_list_xs, extracted_list_ys, 
                 cleansed_for_bottom_level_xs, cleansed_for_bottom_level_ys, 
@@ -542,9 +560,9 @@ private:
     }
 
     void cleanse_bottom_level(rep_array_unsliced<x_type> extracted_list_xs, 
-        rep_array_unsliced<y_type> extracted_list_ys, 
+        rep_array_unsliced<YType> extracted_list_ys, 
         rep_array_unsliced<x_type> cleansed_for_bottom_level_xs,
-        rep_array_unsliced<y_type> cleansed_for_bottom_level_ys,
+        rep_array_unsliced<YType> cleansed_for_bottom_level_ys,
         uint log_N
         )
     {
@@ -560,20 +578,33 @@ private:
 
         if (!had_initial_bottom_level)
         {
+            const uint blocks_per_elem = blocks_per_packed_xy_for<YType>();
+            const uint elem_stride = packed_xy_stride_for<YType>();
+            const uint y_bytes = y_type_bytes_of<YType>();
+            // Create wider sort array: each element is BLOCKS_PER_PACKED_XY blocks
+            //   layout: is_dummy(4B) | x(4B) | y(Y_TYPE_BYTES) | padding
+            rep_array_unsliced<block> sort_array(num_extracted * blocks_per_elem);
             for (uint i = 0; i < num_extracted; i++) {
-                cleanse_bottom_level_circuit_output.copy_bytes_from(extracted_list_xs, 4, 4 * i, 16 * i + 4);
-                cleanse_bottom_level_circuit_output.copy_bytes_from(extracted_list_ys, 8, 8 * i, 16 * i + 8);
+                // Copy is_dummy result from dummy_check output (first sizeof(x_type) bytes)
+                sort_array.copy_bytes_from(cleanse_bottom_level_circuit_output, sizeof(x_type),
+                    i * sizeof(block), i * elem_stride);
+                // Copy x address
+                sort_array.copy_bytes_from(extracted_list_xs, sizeof(x_type),
+                    sizeof(x_type) * i, i * elem_stride + sizeof(x_type));
+                // Copy y data
+                sort_array.copy_bytes_from(extracted_list_ys, y_bytes,
+                    sizeof(YType) * i, i * elem_stride + 2 * sizeof(x_type));
             }
-            // cleanse_bottom_level_circuit_output.debug_print("before sort");
-            batcher::sort<block>(compare_swap_circuit_file, cleanse_bottom_level_circuit_output);
-            // cleanse_bottom_level_circuit_output.debug_print("after sort");
+            batcher::sort<block>(compare_swap_circuit_local, sort_array, blocks_per_elem);
             uint num_to_extract = cleansed_for_bottom_level_xs.length_Ts();
             for (uint i = 0; i < num_to_extract; i++) {
-                cleansed_for_bottom_level_xs.copy_bytes_from(cleanse_bottom_level_circuit_output, 4, 16 * i + 4, 4 * i);
-                cleansed_for_bottom_level_ys.copy_bytes_from(cleanse_bottom_level_circuit_output, 8, 16 * i + 8, 8 * i);
+                cleansed_for_bottom_level_xs.copy_bytes_from(sort_array, sizeof(x_type),
+                    i * elem_stride + sizeof(x_type), sizeof(x_type) * i);
+                cleansed_for_bottom_level_ys.copy_bytes_from(sort_array, y_bytes,
+                    i * elem_stride + 2 * sizeof(x_type), sizeof(YType) * i);
             }
+            sort_array.destroy();
             relabel_dummies(cleansed_for_bottom_level_xs, log_N);
-            // cleansed_for_bottom_level_xs.debug_print("after relabel");
         }
         else {
             // this is a 128x inefficiency in output size
@@ -630,12 +661,12 @@ private:
     void insert_stash(uint level_num)
     {
         assert((level_num < num_levels) && (ohtables[level_num] != nullptr));
-        OHTable_array *cur_ohtable = ohtables[level_num];
+        OHTableArrayT<YType> *cur_ohtable = ohtables[level_num];
 
-        y_type alibi_mask = get_all_zero_except_nth_from_highest<y_type>(level_num);
+        YType alibi_mask = get_all_zero_except_nth_from_highest<YType>(level_num);
 
         rep_array_unsliced<x_type> stash_xs = cur_ohtable->stash_xs;
-        rep_array_unsliced<y_type> stash_ys = cur_ohtable->stash_ys;
+        rep_array_unsliced<YType> stash_ys = cur_ohtable->stash_ys;
 
         stash_ys.apply_or_mask(alibi_mask);
 
@@ -657,16 +688,17 @@ private:
         }
     }
 
-    void extract_alibi_bits(rep_array_unsliced<y_type> y_accum, rep_array_unsliced<int> alibi_mask) {
+    void extract_alibi_bits(rep_array_unsliced<YType> y_accum, rep_array_unsliced<int> alibi_mask) {
         for (uint i = 0; i < num_levels; i++)
         {
             // this is not wrong because we're using y_accum (not y)
             // so won't be reset to 0 if not found at level after found
-            y_accum.extract_bit_xor(sizeof(y_type) * 8 - 1 - i, alibi_mask.window(i, 1));
+            y_accum.extract_bit_xor(y_type_bits() - 1 - i, alibi_mask.window(i, 1));
         }
     }
 
     // this is the old version of this function. Because I tried to do it with no reinserting, I was short on the
     // reinserted elements for anything more than building stupid into l0, which worked
 };
+
 } // namespace emp
