@@ -4,6 +4,7 @@
 #include "sh_riro_garble.h"
 #include <vector>
 #include <stack>
+#include <stdexcept>
 
 
 using namespace std;
@@ -165,6 +166,9 @@ output format (1 block)
 (index | found | 88b unspecified)
  */ 
     start = clock_start();
+    if (lookup_circuit == nullptr) {
+        throw std::runtime_error("optimalcht::lookup_circuit is not initialized");
+    }
     lookup_circuit->compute(circuit_input, circuit_output);
     time_in_circuit = time_from(start);
     start = clock_start();
@@ -182,4 +186,3 @@ output format (1 block)
 }
 
 }
-
