@@ -16,9 +16,6 @@ echo "Regenerating circuits for Y_TYPE_BITS=$Y ..."
 
 python3 xy_if_xs_equal.py "$Y" > "$OUT_DIR/xy_if_xs_equal.txt"
 python3 compare_swap.py "$Y" > "$OUT_DIR/compare_swap.txt"
-python3 add_mul_64.py > "$OUT_DIR/add_mul_64.txt"
-python3 add_less_64.py > "$OUT_DIR/add_less_64.txt"
-python3 add_eq_64.py > "$OUT_DIR/add_eq_64.txt"
 
 # dummy_check and replace_if_dummy only operate on x_type, no Y_TYPE_BITS dependency
 for logN in $(seq 6 31); do
