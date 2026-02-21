@@ -7,6 +7,7 @@
 #include "sh_rep_array.h"
 #include "bristol_fashion_array.h"
 #include "runtime_width.h"
+#include "runtime_y_ops.h"
 #include "utils.h"
 #include "globals.h"
 
@@ -60,116 +61,130 @@ ostream& operator<<(ostream& stream, const OHTableParams& params) {
     return stream << "}\n";
 }
 
-template <typename YType>
-class OHTableArrayT
+class OHTableArray
 {
     // change to private after debuggine
 public:
     OHTableParams params;
     rep_array_unsliced<block> key;
     rep_array_unsliced<x_type> stash_xs;
-    rep_array_unsliced<YType> stash_ys;
+    rep_array_unsliced<block> stash_ys_blocks;
 private:
     rep_array_unsliced<block> qs_builder_order;
     rep_array_unsliced<x_type> xs_builder_order;
-    rep_array_unsliced<YType> ys_builder_order;
+    rep_array_unsliced<block> ys_builder_order_blocks;
     rep_array_unsliced<uint> dummy_indices;
     rep_array_unsliced<x_type> xs_receiver_order;
-    rep_array_unsliced<YType> ys_receiver_order;
+    rep_array_unsliced<block> ys_receiver_order_blocks;
     block* cht_2shares;
     LocalPermutation* receiver_shuffle;
-    bool has_runtime_width_spec;
     runtime_width::RuntimeWidthSpec runtime_width_spec;
-    YType payload_and_alibi_mask;
+    uint64_t y_bytes;
+    uint64_t y_blocks;
+    uint64_t y_stride_bytes;
+    uint64_t stash_y_bytes;
+    uint64_t stash_y_blocks;
+    uint64_t stash_y_stride_bytes;
 
     uint query_count = 0;
 
     vector<bool> touched;
 
 public:
-    OHTableArrayT(const OHTableParams& params,
-    rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys, 
-    rep_array_unsliced<block> key,
-    const runtime_width::RuntimeWidthSpec* runtime_spec = nullptr)
+    OHTableArray(
+        const OHTableParams& params,
+        rep_array_unsliced<x_type> xs,
+        rep_array_unsliced<block> ys_blocks,
+        rep_array_unsliced<block> key,
+        const runtime_width::RuntimeWidthSpec& runtime_spec)
     :params(params),
     key(key),
     stash_xs(params.stash_size),
-    stash_ys(params.stash_size),
+    stash_ys_blocks(
+        static_cast<uint64_t>(params.stash_size) * (
+            (
+                ((runtime_spec.total_bits + 7U) / 8U) + sizeof(block) - 1
+            ) / sizeof(block)
+        )
+    ),
     qs_builder_order(params.total_size()),
     xs_builder_order(params.total_size()),
-    ys_builder_order(params.total_size()),
+    ys_builder_order_blocks(
+        static_cast<uint64_t>(params.total_size()) * (
+            (
+                ((runtime_spec.total_bits + 7U) / 8U) + sizeof(block) - 1
+            ) / sizeof(block)
+        )
+    ),
     dummy_indices(params.num_dummies),
     xs_receiver_order(params.total_size()),
-    ys_receiver_order(params.total_size()),
-    has_runtime_width_spec(runtime_spec != nullptr),
-    runtime_width_spec(runtime_spec != nullptr ? *runtime_spec : runtime_width::RuntimeWidthSpec{}),
-    payload_and_alibi_mask{},
+    ys_receiver_order_blocks(
+        static_cast<uint64_t>(params.total_size()) * (
+            (
+                ((runtime_spec.total_bits + 7U) / 8U) + sizeof(block) - 1
+            ) / sizeof(block)
+        )
+    ),
+    runtime_width_spec(runtime_spec),
+    y_bytes((runtime_spec.total_bits + 7U) / 8U),
+    y_blocks((y_bytes + sizeof(block) - 1) / sizeof(block)),
+    y_stride_bytes(y_blocks * sizeof(block)),
+    stash_y_bytes((runtime_spec.total_bits + 7U) / 8U),
+    stash_y_blocks((stash_y_bytes + sizeof(block) - 1) / sizeof(block)),
+    stash_y_stride_bytes(stash_y_blocks * sizeof(block)),
     touched(params.total_size())
     {
         assert(xs.length_Ts() == params.num_elements);
-        assert(ys.length_Ts() == params.num_elements);
+        assert(ys_blocks.length_Ts() == static_cast<uint64_t>(params.num_elements) * y_blocks);
         assert(key.length_Ts() == prf_key_size_blocks());
+        assert(y_bytes > 0);
+        assert(y_blocks > 0);
+        assert(y_stride_bytes > 0);
+        assert(stash_y_bytes == y_bytes);
+        assert(stash_y_blocks == y_blocks);
+        assert(stash_y_stride_bytes == y_stride_bytes);
 
         params.validate();
-        init_runtime_masks();
-        
-        build(xs, ys);
+
+        build_blocks(xs, ys_blocks);
     }
 
-    ~OHTableArrayT() {
+    ~OHTableArray() {
         key.destroy();
+        stash_ys_blocks.destroy();
         qs_builder_order.destroy();
         xs_builder_order.destroy();
-        ys_builder_order.destroy();
+        ys_builder_order_blocks.destroy();
         dummy_indices.destroy();
         xs_receiver_order.destroy();
-        ys_receiver_order.destroy();
+        ys_receiver_order_blocks.destroy();
     }
 
-    void build(rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys) {
+    void build_blocks(rep_array_unsliced<x_type> xs, rep_array_unsliced<block> ys_blocks) {
         using namespace thread_unsafe;
-        keep_payload_and_alibi(ys);
-        // compute qs
+        keep_payload_and_alibi_blocks(ys_blocks, xs.length_Ts());
         uint prf_input_size_blocks = prf_key_size_blocks() + 1;
         rep_array_unsliced<block> keys_and_inputs(prf_input_size_blocks * params.num_elements);
         for (uint i = 0; i < params.num_elements; i++) {
             keys_and_inputs.copy_Ts_from(key, prf_key_size_blocks(), 0, prf_input_size_blocks * i);
-            keys_and_inputs.copy_one<x_type>(prf_input_size_blocks * (i+1) - 1, xs, i);
+            keys_and_inputs.copy_one<x_type>(prf_input_size_blocks * (i + 1) - 1, xs, i);
         }
-        // xs.debug_print("xs before shuffle", 4);
-        // keys_and_inputs.debug_print("keys_and_inputs", 44);
         auto start = clock_start();
         prf_circuit->compute_multithreaded(qs_builder_order, keys_and_inputs, params.num_elements);
         time_total_build_prf += time_from(start);
-        //qs_builder_order.debug_print("qs before shuffle", 4);
-        /* quick spot check
-        block* aes_results_mpc = new block[params.total_size()];
-        qs_builder_order.reveal_to(1, (uint8_t*)aes_results_mpc);
-        dbg_args(aes_results_mpc[999]);
-        dbg_args(aes_results_mpc[1000]);*/
         ArrayShuffler builder_shuffler(params.total_size());
         xs_builder_order.copy_bytes_from(xs, xs.length_bytes);
-        ys_builder_order.copy_bytes_from(ys, ys.length_bytes);
+        ys_builder_order_blocks.copy_bytes_from(
+            ys_blocks,
+            static_cast<uint64_t>(params.num_elements) * y_stride_bytes
+        );
         rep_array_unsliced<uint> indices_builder_order(params.total_size());
         builder_shuffler.forward(qs_builder_order);
         builder_shuffler.forward(xs_builder_order);
-        builder_shuffler.forward(ys_builder_order);
+        builder_shuffler.forward_rows(ys_builder_order_blocks, static_cast<uint>(y_blocks));
         builder_shuffler.indices(indices_builder_order);
         dummy_indices.copy_Ts_from(indices_builder_order, params.num_dummies, params.num_elements);
-        //dummy_indices.debug_print("dummies", 10);
-        // another quick spot check: xs and indices consistent
-        /*
-        uint *indices_shuffled_spot_check = new uint[params.total_size()];
-        uint *xs_shuffled_spot_check = new uint[params.total_size()];
-        xs_builder_order.reveal_to(1, xs_shuffled_spot_check);
-        indices_builder_order.reveal_to(1, indices_shuffled_spot_check);
-        for (uint i = 0; i < 10; i++) {
-            // this should print x[0] through x[9] in the second column
-            cerr << indices_shuffled_spot_check[i] << ' ' << xs_shuffled_spot_check[indices_shuffled_spot_check[i]] << '\n';
-        }
-        */
-        //* in the rep_share version of build, we append index tags to qs first
-        //* so here we append in the clear afterwards
+
         vector<block> qs_in_clear_compacted(params.num_elements);
         {
             vector<block> qs_in_clear(params.total_size());
@@ -178,10 +193,6 @@ public:
             if (party == params.builder) {
                 uint j = 0;
                 for (uint i = 0; i < params.total_size(); i++) {
-                    // are 96 bits enough?
-                    // collision probability ~2^-48 which is better than the CHT build failure we're running - or is it?
-                    // have to consider lifetime of the DORAM; CHT must succeed every time
-                    // we could always just store more bits
                     if (blocksEqual(qs_in_clear[i], zero_block)) continue;
                     qs_in_clear_compacted[j] = (qs_in_clear[i] & makeBlock(ULLONG_MAX, ULLONG_MAX << 32)) | makeBlock(0, i);
                     j++;
@@ -193,35 +204,9 @@ public:
         vector<uint> stash_indices_builder(params.stash_size);
         if (party == params.builder) {
             LocalPermutation builder_local_perm(thread_unsafe::private_prg, params.num_elements);
-            // this doesn't affect the stash indices, which are taken from the elements themselves
             builder_local_perm.shuffle(qs_in_clear_compacted.data());
             optimalcht::build(builder_cht, params.cht_log_single_col_len, qs_in_clear_compacted, stash_indices_builder);
         }
-        /* spot check by eye: 
-        // CHT elements have indices appended
-        // elements in table 0 are stored at their hash0 (bits 64-64+x)
-        // elements in table 1 are stored at their hash1 (bits 96-96+x)
-        if (party == params.builder) {
-            for (int i = 0; i < 40; i++)
-                dbg_args(builder_cht[(1<<params.cht_log_single_col_len) + i]);
-            vector<uint> index_count(params.total_size());
-            uint num_nonzero = 0;
-            // something like set equality check
-            for (int i = 0; i < params.cht_full_table_length(); i++) {
-                if (!blocksEqual(builder_cht[i], zero_block)) {
-                    index_count[builder_cht[i][0] & ((1 << 20) - 1)]++;
-                    num_nonzero++;
-                }
-            }
-            for (int i = 0; i < params.total_size(); i++) {
-                if (index_count[i] > 1) {
-                    dbg("bad index", i);
-                }
-                assert(index_count[i] <= 1);
-            }
-            dbg_args(num_nonzero, params.num_elements - params.stash_size);
-        }
-        */
         rep_array_unsliced<block> cht_shares(params.cht_full_table_length());
         cht_2shares = new block[params.cht_full_table_length()];
         cht_shares.input(params.builder, builder_cht.data());
@@ -229,18 +214,19 @@ public:
 
         ArrayShuffler receiver_shuffler(params.total_size());
         xs_receiver_order.copy(xs_builder_order);
-        ys_receiver_order.copy(ys_builder_order);
+        ys_receiver_order_blocks.copy(ys_builder_order_blocks);
         receiver_shuffler.forward_known_to_p_and_next(next_party(params.builder), xs_receiver_order);
-        receiver_shuffler.forward_known_to_p_and_next(next_party(params.builder), ys_receiver_order);
-        // copy the permutation shared between the two receivers
+        receiver_shuffler.forward_known_to_p_and_next_rows(
+            next_party(params.builder),
+            ys_receiver_order_blocks,
+            static_cast<uint>(y_blocks)
+        );
         if (party == prev_party(params.builder)) {
             receiver_shuffle = new LocalPermutation(receiver_shuffler.prev_shared_perm);
         } else if (party == next_party(params.builder)) {
             receiver_shuffle = new LocalPermutation(receiver_shuffler.next_shared_perm);
         }
 
-        // compute stash indices in receiver order so that all can mark stashed elements 
-        // first send out in builder order, then convert to receiver
         if (party == params.builder) {
             prev_io->send_data(stash_indices_builder.data(), params.stash_size * sizeof(uint));
             next_io->send_data(stash_indices_builder.data(), params.stash_size * sizeof(uint));
@@ -263,28 +249,30 @@ public:
             prev_io->recv_data(stash_indices_receiver.data(), params.stash_size * sizeof(uint));
         }
 
-        // pretend that stashed indices have already been queried
-        // another reason it's important for stash to contain all real elements
         for (uint i = 0; i < params.stash_size; i++) {
             touched[stash_indices_receiver[i]] = true;
             stash_xs.copy_one(i, xs_receiver_order, stash_indices_receiver[i]);
-            stash_ys.copy_one(i, ys_receiver_order, stash_indices_receiver[i]);
+            stash_ys_blocks.copy_bytes_from(
+                ys_receiver_order_blocks,
+                stash_y_bytes,
+                static_cast<uint64_t>(stash_indices_receiver[i]) * stash_y_stride_bytes,
+                static_cast<uint64_t>(i) * stash_y_stride_bytes
+            );
         }
-        keep_payload_and_alibi(stash_ys);
-        // seems to be double counting the effect of reinserting the stash_size elements
-        // query_count = params.stash_size;
-
-        // ys_builder_order.debug_print("ys_builder_order", 10);
-        // ys_receiver_order.debug_print("ys_receiver_order", 10);
 
         keys_and_inputs.destroy();
         cht_shares.destroy();
     }
 
-    void query (rep_array_unsliced<block> q, rep_array_unsliced<int> use_dummy, rep_array_unsliced<YType> y, rep_array_unsliced<int> found) {
+    void query_blocks(
+        rep_array_unsliced<block> q,
+        rep_array_unsliced<int> use_dummy,
+        rep_array_unsliced<block> y_blocks,
+        rep_array_unsliced<int> found) {
         using namespace thread_unsafe;
         assert(query_count < params.num_dummies);
         assert(q.length_Ts() == 1);
+        assert(y_blocks.length_Ts() == y_blocks_count_for_rows(1));
         auto start = clock_start();
         rep_array_unsliced<block> q_or_dummy(1);
         rep_array_unsliced<block> dummy(1);
@@ -326,44 +314,70 @@ public:
         assert(!touched[index_receiver_order]);
         touched[index_receiver_order] = true;
 
-        y.copy_one(0, ys_receiver_order, index_receiver_order);
-        keep_payload_and_alibi(y);
+        y_blocks.copy_bytes_from(
+            ys_receiver_order_blocks,
+            y_bytes,
+            static_cast<uint64_t>(index_receiver_order) * y_stride_bytes,
+            0
+        );
+        runtime_y_ops::keep_payload_and_alibi(
+            reinterpret_cast<uint8_t*>(y_blocks.mut_prev_data()),
+            runtime_width_spec
+        );
+        runtime_y_ops::keep_payload_and_alibi(
+            reinterpret_cast<uint8_t*>(y_blocks.mut_next_data()),
+            runtime_width_spec
+        );
         query_count++;
         time_after_cht = time_from(start);
     }
 
-    void extract(rep_array_unsliced<x_type> extract_xs, rep_array_unsliced<YType> extract_ys) {
+    void extract_blocks(
+        rep_array_unsliced<x_type> extract_xs,
+        rep_array_unsliced<block> extract_ys_blocks) {
         assert(query_count == params.num_dummies);
+        assert(extract_ys_blocks.length_Ts() == y_blocks_count_for_rows(extract_xs.length_Ts()));
         uint num_extracted = 0;
         for (uint i = 0; i < params.total_size(); i++) {
             if (touched[i]) continue;
             extract_xs.copy_one(num_extracted, xs_receiver_order, i);
-            extract_ys.copy_one(num_extracted, ys_receiver_order, i);
+            extract_ys_blocks.copy_bytes_from(
+                ys_receiver_order_blocks,
+                y_bytes,
+                static_cast<uint64_t>(i) * y_stride_bytes,
+                static_cast<uint64_t>(num_extracted) * y_stride_bytes
+            );
             num_extracted++;
         }
-        keep_payload_and_alibi(extract_ys);
+        for (uint64_t i = 0; i < num_extracted; ++i) {
+            runtime_y_ops::keep_payload_and_alibi(
+                reinterpret_cast<uint8_t*>(extract_ys_blocks.mut_prev_data()) + i * y_stride_bytes,
+                runtime_width_spec
+            );
+            runtime_y_ops::keep_payload_and_alibi(
+                reinterpret_cast<uint8_t*>(extract_ys_blocks.mut_next_data()) + i * y_stride_bytes,
+                runtime_width_spec
+            );
+        }
         assert(num_extracted == params.num_elements - params.stash_size);
     }
 
 private:
-    void init_runtime_masks() {
-        if (!has_runtime_width_spec) {
-            return;
-        }
-        assert(runtime_width_spec.total_bits == 8 * sizeof(YType));
-        payload_and_alibi_mask = get_all_ones_rightshifted_by<YType>(
-            runtime_width_spec.total_bits - runtime_width_spec.payload_bits
-        );
-        for (uint i = 0; i < runtime_width_spec.alibi_bits; i++) {
-            payload_and_alibi_mask |= get_all_zero_except_nth_from_highest<YType>(i);
-        }
+    uint64_t y_blocks_count_for_rows(uint64_t rows) const {
+        return rows * y_blocks;
     }
 
-    inline void keep_payload_and_alibi(rep_array_unsliced<YType> ys) {
-        if (!has_runtime_width_spec) {
-            return;
+    inline void keep_payload_and_alibi_blocks(rep_array_unsliced<block> ys_blocks, uint64_t rows) {
+        for (uint64_t i = 0; i < rows; ++i) {
+            runtime_y_ops::keep_payload_and_alibi(
+                reinterpret_cast<uint8_t*>(ys_blocks.mut_prev_data()) + i * y_stride_bytes,
+                runtime_width_spec
+            );
+            runtime_y_ops::keep_payload_and_alibi(
+                reinterpret_cast<uint8_t*>(ys_blocks.mut_next_data()) + i * y_stride_bytes,
+                runtime_width_spec
+            );
         }
-        ys.apply_and_mask(payload_and_alibi_mask);
     }
 };
 

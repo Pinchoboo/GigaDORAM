@@ -105,14 +105,11 @@ typedef unsigned long long ull;
 typedef uint32_t x_type;
 
 // ---------------------------------------------------------------------------
-// y_type: fixed compile-time width.
-// Override Y_TYPE_BITS at compile time to set the maximum width for builds.
+// y_type: legacy fixed compile-time width alias.
+// Runtime path should not depend on this alias for sizing decisions.
 // ---------------------------------------------------------------------------
-#ifndef Y_TYPE_BITS
-#define Y_TYPE_BITS 64
-#endif
-#define Y_TYPE_MAX_BITS Y_TYPE_BITS
-#define Y_TYPE_MAX_BYTES ((Y_TYPE_MAX_BITS + 7) / 8)
+inline constexpr uint32_t Y_TYPE_MAX_BITS = 1024;
+inline constexpr uint32_t Y_TYPE_MAX_BYTES = (Y_TYPE_MAX_BITS + 7) / 8;
 
 template <size_t FixedBytes>
 struct y_type_t {

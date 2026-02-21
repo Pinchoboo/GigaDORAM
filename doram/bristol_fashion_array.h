@@ -7,6 +7,7 @@
 #include "sh_rep_array.h"
 #include <iostream>
 #include <stdio.h>
+#include <sstream>
 #include <vector>
 
 using namespace std;
@@ -45,6 +46,8 @@ class BristolFashion_array
 
     int max_gate_input_wires = 0, max_gate_output_wires = 0;
 
+    BristolFashion_array() = default;
+
     BristolFashion_array(string file)
     {
         this->from_file_extended(file);
@@ -64,6 +67,27 @@ class BristolFashion_array
             exit(1);
         }
         ifstream file(filename);
+        from_stream(file);
+    }
+
+    void from_string(const string& text) {
+        istringstream stream(text);
+        from_stream(stream);
+    }
+
+    template <typename InputStream>
+    void from_stream(InputStream& file)
+    {
+        num_gate = 0;
+        num_and_gate = 0;
+        num_wire = 0;
+        num_input = 0;
+        num_output = 0;
+        gates.clear();
+        mand_input_lists.clear();
+        mand_output_lists.clear();
+        max_gate_input_wires = 0;
+        max_gate_output_wires = 0;
 
         file >> num_gate >> num_wire;
         int num_input_values, num_output_values;

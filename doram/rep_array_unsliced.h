@@ -23,6 +23,11 @@ private:
 public:
     uint64_t length_bytes;
     inline uint64_t length_Ts() {return length_bytes / sizeof(T);}
+    inline uint64_t length_Ts() const {return length_bytes / sizeof(T);}
+    inline const T* prev_data() const { return prev; }
+    inline const T* next_data() const { return next; }
+    inline T* mut_prev_data() { return prev; }
+    inline T* mut_next_data() { return next; }
 
     // rep_array_unsliced is zero initialized
     explicit rep_array_unsliced(uint64_t length_Ts)

@@ -5,6 +5,7 @@
 #include "globals.h" //player's global prgs&ios
 #include "ohtable_array.h"
 #include "runtime_width.h"
+#include "runtime_y_ops.h"
 #include "stupid_level.h"
 #include "batcher.h"
 
@@ -23,8 +24,7 @@ const bool use_proven_cht_bounds = false;
 
 namespace emp
 {
-template <typename YType>
-class DORAMT
+class DORAM
 {
   public:
     // constructor inits these
@@ -34,8 +34,6 @@ class DORAMT
     uint active_payload_bits;
     BristolFashion_array* compare_swap_circuit_local;
     rep_array_unsliced<block> prf_keys;
-    YType payload_mask;
-    YType payload_and_alibi_mask;
     runtime_width::RuntimeWidthSpec runtime_width_spec;
 
     uint log_sls, stupid_fill_time, stash_size; // params set by testing 
@@ -48,8 +46,8 @@ class DORAMT
     //* ohtable levels are 0-indexed: 
     //* first level after stupid level is 0
     //* bottom level is num_levels - 1
-    vector<OHTableArrayT<YType>*> ohtables;
-    RuntimeStupidLevelT<YType> *stupid_level;
+    vector<OHTableArray*> ohtables;
+    RuntimeStupidLevel *stupid_level;
 
     //?all the other ohtable params: make a struct?
     vector<uint> base_b_state_vec;
@@ -59,14 +57,14 @@ class DORAMT
 
     bool had_initial_bottom_level;
 public:
-    DORAMT(
+    DORAM(
         uint log_address_space_size,
-        rep_array_unsliced<YType> *ys_no_dummy_room,
         uint num_levels,
         uint log_amp_factor,
         BristolFashion_array* xy_if_xs_equal_circuit_local,
         BristolFashion_array* compare_swap_circuit_local,
-        uint active_payload_bits = y_type_bits_of<YType>())
+        uint active_payload_bits,
+        rep_array_unsliced<block>* ys_no_dummy_room_blocks = nullptr)
         : 
         log_address_space_size(log_address_space_size),
         num_levels(num_levels),
@@ -74,23 +72,25 @@ public:
         active_payload_bits(active_payload_bits),
         compare_swap_circuit_local(compare_swap_circuit_local),
         prf_keys(num_levels * prf_key_size_blocks()),
-        payload_mask{},
-        payload_and_alibi_mask{},
         runtime_width_spec{}
     {
         assert(xy_if_xs_equal_circuit_local != nullptr);
         assert(this->compare_swap_circuit_local != nullptr);
-        runtime_width_spec = runtime_width::make_runtime_width_spec(
-            this->active_payload_bits, num_levels, y_type_bits()
+        const uint32_t total_bits = runtime_width::checked_u32_add(
+            this->active_payload_bits, num_levels, "DORAM total bits"
         );
-        init_runtime_masks();
+        runtime_width_spec = runtime_width::make_runtime_width_spec(
+            this->active_payload_bits, num_levels, total_bits
+        );
         // input should be 1 shorter than address space size
-        if (ys_no_dummy_room == nullptr) {
+        if (ys_no_dummy_room_blocks == nullptr) {
             had_initial_bottom_level = false;
         } else {
             had_initial_bottom_level = true;
-            assert((1U << log_address_space_size) - 1 == ys_no_dummy_room->length_Ts());
-            ys_no_dummy_room->apply_and_mask(payload_mask);
+            assert(
+                ys_no_dummy_room_blocks->length_Ts() ==
+                static_cast<uint64_t>((1U << log_address_space_size) - 1) * runtime_width_spec.y_blocks
+            );
         }
 
         dbg("Initializing DORAM");
@@ -102,7 +102,7 @@ public:
         dbg("initialized DORAM params");
 
         //*init stupid (runtime-width path)
-        stupid_level = new RuntimeStupidLevelT<YType>(
+        stupid_level = new RuntimeStupidLevel(
             1 << log_sls, xy_if_xs_equal_circuit_local, runtime_width_spec
         );
 
@@ -131,7 +131,8 @@ public:
             xs_no_dummy_room.input_public(xs_1_to_n_clear.data());
 
             dbg("creating largest level and inserting stash");
-            new_ohtable_of_level(num_levels - 1, xs_no_dummy_room, *ys_no_dummy_room); // data_len is known using the base
+            keep_payload_only_blocks(*ys_no_dummy_room_blocks, ys_no_dummy_room_blocks->length_Ts() / runtime_width_spec.y_blocks);
+            new_ohtable_of_level_blocks(num_levels - 1, xs_no_dummy_room, *ys_no_dummy_room_blocks);
             insert_stash(num_levels - 1); // this will ussuly happen as part of rebuild (the only other occusion where
         } else {
             // fake having a stash
@@ -147,30 +148,31 @@ public:
     }
 
 private:
-    static inline uint y_type_bits() {
-        return y_type_bits_of<YType>();
-    }
 
-    static inline uint y_type_bytes() {
-        return y_type_bytes_of<YType>();
-    }
-
-    void init_runtime_masks() {
-        payload_mask = get_all_ones_rightshifted_by<YType>(
-            runtime_width_spec.total_bits - runtime_width_spec.payload_bits
-        );
-        payload_and_alibi_mask = payload_mask;
-        for (uint i = 0; i < runtime_width_spec.alibi_bits; i++) {
-            payload_and_alibi_mask |= get_all_zero_except_nth_from_highest<YType>(i);
+    inline void keep_payload_only_blocks(rep_array_unsliced<block>& ys_blocks, uint64_t rows = 1) {
+        for (uint64_t i = 0; i < rows; ++i) {
+            runtime_y_ops::keep_payload_only(
+                reinterpret_cast<uint8_t*>(ys_blocks.mut_prev_data()) + i * runtime_width_spec.y_stride_bytes,
+                runtime_width_spec
+            );
+            runtime_y_ops::keep_payload_only(
+                reinterpret_cast<uint8_t*>(ys_blocks.mut_next_data()) + i * runtime_width_spec.y_stride_bytes,
+                runtime_width_spec
+            );
         }
     }
 
-    inline void keep_payload_only(rep_array_unsliced<YType> &ys) {
-        ys.apply_and_mask(payload_mask);
-    }
-
-    inline void keep_payload_and_alibi(rep_array_unsliced<YType> &ys) {
-        ys.apply_and_mask(payload_and_alibi_mask);
+    inline void keep_payload_and_alibi_blocks(rep_array_unsliced<block>& ys_blocks, uint64_t rows = 1) {
+        for (uint64_t i = 0; i < rows; ++i) {
+            runtime_y_ops::keep_payload_and_alibi(
+                reinterpret_cast<uint8_t*>(ys_blocks.mut_prev_data()) + i * runtime_width_spec.y_stride_bytes,
+                runtime_width_spec
+            );
+            runtime_y_ops::keep_payload_and_alibi(
+                reinterpret_cast<uint8_t*>(ys_blocks.mut_next_data()) + i * runtime_width_spec.y_stride_bytes,
+                runtime_width_spec
+            );
+        }
     }
 
     void decide_params()
@@ -224,23 +226,20 @@ private:
         return cnt;
     }
 
-    //*xs and ys must have len data_len+get_num_dummies(data_len)
-    // base b should be incremmented on the outside
-    void new_ohtable_of_level(uint level_num, rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys)
+    void new_ohtable_of_level_blocks(
+        uint level_num,
+        rep_array_unsliced<x_type> xs,
+        rep_array_unsliced<block> ys_blocks)
     {
         auto _start = clock_start();
 
         assert(level_num < num_levels);
-        keep_payload_and_alibi(ys);
-        if (level_num == num_levels - 1)
-        {
+        keep_payload_and_alibi_blocks(ys_blocks, xs.length_Ts());
+        if (level_num == num_levels - 1) {
             base_b_state_vec[level_num] = 1;
-        }
-        else
-        {
+        } else {
             base_b_state_vec[level_num] += 1;
-        } 
-
+        }
 
         uint state = base_b_state_vec[level_num];
         assert(state < (uint)(1 << log_amp_factor));
@@ -256,12 +255,11 @@ private:
         params.cht_log_single_col_len = get_log_col_len(level_num);
         rep_array_unsliced<block> key = generate_prf_key(level_num);
 
-        OHTableArrayT<YType>* new_ohtable = new OHTableArrayT<YType>(
-            params, xs, ys, key, &runtime_width_spec
+        OHTableArray* new_ohtable = new OHTableArray(
+            params, xs, ys_blocks, key, runtime_width_spec
         );
 
         time_total_builds[level_num] += time_from(_start);
-
         ohtables[level_num] = new_ohtable;
     }
 
@@ -341,7 +339,7 @@ private:
     //? note that xs and ys need be deallocated by caller? (that's the way it is, is it a good practice?, it's
     // different
     // than @ ohtable)
-    ~DORAMT()
+    ~DORAM()
     {
         auto _start = clock_start();
         dbg("destructing DORAM");
@@ -360,47 +358,28 @@ private:
         time_total_deletes += time_from(_start);
     }
 
-    rep_array_unsliced<YType> read_and_write(rep_array_unsliced<x_type> qry_x, rep_array_unsliced<YType> qry_y, 
+    rep_array_unsliced<block> read_and_write_blocks(
+        rep_array_unsliced<x_type> qry_x,
+        rep_array_unsliced<block> qry_y_blocks,
         rep_array_unsliced<int> is_write)
     {
         using namespace thread_unsafe;
         assert(is_write.length_bytes > 0);
-        keep_payload_only(qry_y);
+        assert(qry_y_blocks.length_Ts() == runtime_width_spec.y_blocks);
+        keep_payload_only_blocks(qry_y_blocks);
 
-        //*set up global params
-        // todo can reuse this mem
-
-        // Four accumulator variables
-        // Alibi mask accumulator
-        rep_array_unsliced<int> alibi_mask(num_levels); // reset alibi mask
-        rep_array_unsliced<YType> y_accum(1);
+        rep_array_unsliced<int> alibi_mask(num_levels);
+        rep_array_unsliced<block> y_accum_blocks(runtime_width_spec.y_blocks);
         rep_array_unsliced<int> found(1);
         rep_array_unsliced<int> use_dummy(1);
 
-        //* check if a rebuild is necessery
-        if (!stupid_level->is_writeable()) // if we need to rebuild before we can query
+        if (!stupid_level->is_writeable())
         {
-            rebuild(); // always must triggered from stupid -- there is no way stupid is queriable
-            // dbg("\n\n\n\n FINISHED REBUILD OF (SOME) LEVEL \n\n\n\n");
-            //  if we are querying from the fake query driver, we don't want to run real queries and better exit
+            rebuild();
         }
 
-        auto _start = clock_start(); //* we start here because before we do very minimal work and we don't wanna double
-                                     // count the builds
+        auto _start = clock_start();
 
-        //*
-        //*compute PRFs on for the query on all levels
-        //*
-        // we do this after potential rebuild so we know what levels will be around, but actually, this can be
-        // parallilzed
-        // todo: haven't even built it, but there will be optimisations
-        // todo all this stuff can be moved to be global to DORAM
-
-        // prepare input setting up chunks of 128 * (keysize + 1) bits 
-        // s.t first 128 * keysize are the key, 
-        // then next sizeof(x_type)*8 are qry_x
-        // trailing bits are 0
-                
         uint prf_input_size_blocks = (prf_key_size_blocks() + 1);
         rep_array_unsliced<block> prf_input(prf_input_size_blocks * num_levels);
         for (uint i = 0; i < num_levels; i++) {
@@ -410,70 +389,62 @@ private:
             }
         }
 
-        //*actually eval prf
         rep_array_unsliced<block> prf_output(num_levels);
         auto query_prf_start = clock_start();
         prf_circuit->compute(prf_output, prf_input, num_levels, rep_exec);
         time_total_query_prf += time_from(query_prf_start);
 
-
-        assert(is_write.length_bytes > 0);
-        //*
-        //*we rebuilt if necessery, we prepered PRF evals, now query -- doing circuit logic
-        //*
-
-        //* query stupid & extract aliby bits
         auto query_stupid_start = clock_start();
-        stupid_level->query(qry_x, y_accum, found);
+        stupid_level->query_blocks(qry_x, y_accum_blocks, found);
         time_total_query_stupid += time_from(query_stupid_start);
 
-        assert(is_write.length_bytes > 0);
-        keep_payload_and_alibi(y_accum);
-        extract_alibi_bits(y_accum, alibi_mask);
+        keep_payload_and_alibi_blocks(y_accum_blocks);
+        extract_alibi_bits_blocks(y_accum_blocks, alibi_mask);
 
-        //__print_replicated_val(found, "found (after qry stupid) is");
-        //*traverse the rest of the hierarchy
         for (uint i = 0; i < num_levels; i++)
         {
             if (ohtables[i] != nullptr)
             {
-
                 use_dummy.copy_one(0, alibi_mask, i);
                 use_dummy.xor_with(found);
 
-                /*
-                dbg(i);
-                found.debug_print("found");
-                use_dummy.debug_print("use_dummy");
-                alibi_mask.debug_print("alibi_mask");
-                */
-                rep_array_unsliced<YType> y_returned(1);
+                rep_array_unsliced<block> y_returned_blocks(runtime_width_spec.y_blocks);
                 rep_array_unsliced<int> found_returned(1);
-                ohtables[i]->query(prf_output.window(i, 1), use_dummy, y_returned, found_returned);
-                keep_payload_and_alibi(y_returned);
+                ohtables[i]->query_blocks(prf_output.window(i, 1), use_dummy, y_returned_blocks, found_returned);
+                keep_payload_and_alibi_blocks(y_returned_blocks);
 
-                y_accum.xor_with(y_returned);
+                y_accum_blocks.xor_with(y_returned_blocks);
                 found.xor_with(found_returned);
 
-                keep_payload_and_alibi(y_accum);
-                extract_alibi_bits(y_accum, alibi_mask);
-                //__print_replicated_val(found, "after querying level " + to_string(i) + " found is now:");
+                keep_payload_and_alibi_blocks(y_accum_blocks);
+                extract_alibi_bits_blocks(y_accum_blocks, alibi_mask);
+                y_returned_blocks.destroy();
+                found_returned.destroy();
             }
         }
 
-        assert(is_write.length_bytes > 0);
+        rep_array_unsliced<block> write_y_blocks(runtime_width_spec.y_blocks);
+        for (uint i = 0; i < runtime_width_spec.y_blocks; ++i) {
+            rep_exec->if_then_else(
+                is_write,
+                qry_y_blocks.window(i, 1),
+                y_accum_blocks.window(i, 1),
+                write_y_blocks.window(i, 1)
+            );
+        }
+        keep_payload_only_blocks(write_y_blocks);
+        stupid_level->write_blocks(qry_x, write_y_blocks);
+        write_y_blocks.destroy();
 
-        rep_array_unsliced<YType> write_y(1);
-        rep_exec->if_then_else(is_write, qry_y, y_accum, write_y);
-        // Keep only active payload bits; drop alibi and inactive slack bits.
-        keep_payload_only(write_y);
-        stupid_level->write(qry_x, write_y);
-
-        // Return payload-only value to caller.
-        keep_payload_only(y_accum);
+        keep_payload_only_blocks(y_accum_blocks);
 
         time_total_queries += time_from(_start);
-        return y_accum;
+        alibi_mask.destroy();
+        found.destroy();
+        use_dummy.destroy();
+        prf_input.destroy();
+        prf_output.destroy();
+        return y_accum_blocks;
     }
 
     void rebuild()
@@ -526,26 +497,35 @@ private:
                 || tot_num_to_extract == num_elements_at(rebuild_to, base_b_state_vec[rebuild_to] + 1));
 
         rep_array_unsliced<x_type> extracted_list_xs(tot_num_to_extract);
-        rep_array_unsliced<YType> extracted_list_ys(tot_num_to_extract);
+        rep_array_unsliced<block> extracted_list_ys_blocks(
+            static_cast<uint64_t>(tot_num_to_extract) * runtime_width_spec.y_blocks
+        );
 
         uint num_extracted = 0;
 
         //* extract_stupid
 
-        stupid_level->extract(extracted_list_xs.window(0, (1 << log_sls)),
-            extracted_list_ys.window(0, (1 << log_sls)));
+        stupid_level->extract_blocks(
+            extracted_list_xs.window(0, (1 << log_sls)),
+            extracted_list_ys_blocks.window(0, static_cast<uint64_t>(1 << log_sls) * runtime_width_spec.y_blocks)
+        );
         num_extracted += (uint)(1 << log_sls); // there is an assert in extract checking that we onlu extract when
                                                // we extract sls many els
         // dbg("num extracted from stupid", num_extracted);
         for (uint i = 0; i < (rebuild_to + need_to_extract_from_rebuild_to); i++)
         {
-            ohtables[i]->extract(extracted_list_xs.window(num_extracted, num_elements_at(i)),
-                             extracted_list_ys.window(num_extracted, num_elements_at(i)));
+            ohtables[i]->extract_blocks(
+                extracted_list_xs.window(num_extracted, num_elements_at(i)),
+                extracted_list_ys_blocks.window(
+                    static_cast<uint64_t>(num_extracted) * runtime_width_spec.y_blocks,
+                    static_cast<uint64_t>(num_elements_at(i)) * runtime_width_spec.y_blocks
+                )
+            );
 
             num_extracted += num_elements_at(i);
         }
         assert(num_extracted == tot_num_to_extract);
-        keep_payload_and_alibi(extracted_list_ys);
+        keep_payload_and_alibi_blocks(extracted_list_ys_blocks, tot_num_to_extract);
 
         //*we now have all the xs and the ys into a list, let's re-number the dummies
 
@@ -558,14 +538,16 @@ private:
             if (had_initial_bottom_level) {
                 ArrayShuffler pre_cleanse_shuffler(num_extracted);
                 pre_cleanse_shuffler.forward(extracted_list_xs);
-                pre_cleanse_shuffler.forward(extracted_list_ys);
+                pre_cleanse_shuffler.forward_rows(extracted_list_ys_blocks, static_cast<uint>(runtime_width_spec.y_blocks));
             }
 
             rep_array_unsliced<x_type> cleansed_for_bottom_level_xs(num_elements_at(num_levels - 1));
-            rep_array_unsliced<YType> cleansed_for_bottom_level_ys(num_elements_at(num_levels - 1));
+            rep_array_unsliced<block> cleansed_for_bottom_level_ys_blocks(
+                static_cast<uint64_t>(num_elements_at(num_levels - 1)) * runtime_width_spec.y_blocks
+            );
 
-            cleanse_bottom_level(extracted_list_xs, extracted_list_ys, 
-                cleansed_for_bottom_level_xs, cleansed_for_bottom_level_ys, 
+            cleanse_bottom_level_blocks(extracted_list_xs, extracted_list_ys_blocks, 
+                cleansed_for_bottom_level_xs, cleansed_for_bottom_level_ys_blocks, 
                 log_address_space_size);
 
             for (uint i = 0; i < num_levels; i++)
@@ -573,10 +555,10 @@ private:
                 if (i == num_levels - 1 && !had_initial_bottom_level && base_b_state_vec[i] == 0) break;
                 delete_ohtable(i);
             }
-            new_ohtable_of_level(num_levels - 1, cleansed_for_bottom_level_xs, cleansed_for_bottom_level_ys);
+            new_ohtable_of_level_blocks(num_levels - 1, cleansed_for_bottom_level_xs, cleansed_for_bottom_level_ys_blocks);
 
             cleansed_for_bottom_level_xs.destroy();
-            cleansed_for_bottom_level_ys.destroy();
+            cleansed_for_bottom_level_ys_blocks.destroy();
         }
         else
         {
@@ -591,7 +573,7 @@ private:
             {
                 delete_ohtable(rebuild_to);
             }
-            new_ohtable_of_level(rebuild_to, extracted_list_xs, extracted_list_ys);
+            new_ohtable_of_level_blocks(rebuild_to, extracted_list_xs, extracted_list_ys_blocks);
         }
 
         stupid_level->clear();
@@ -600,17 +582,17 @@ private:
 
         insert_stash(rebuild_to);
         extracted_list_xs.destroy();
-        extracted_list_ys.destroy();
+        extracted_list_ys_blocks.destroy();
     }
 
-    void cleanse_bottom_level(rep_array_unsliced<x_type> extracted_list_xs, 
-        rep_array_unsliced<YType> extracted_list_ys, 
+    void cleanse_bottom_level_blocks(rep_array_unsliced<x_type> extracted_list_xs, 
+        rep_array_unsliced<block> extracted_list_ys_blocks, 
         rep_array_unsliced<x_type> cleansed_for_bottom_level_xs,
-        rep_array_unsliced<YType> cleansed_for_bottom_level_ys,
+        rep_array_unsliced<block> cleansed_for_bottom_level_ys_blocks,
         uint log_N
         )
     {
-        keep_payload_and_alibi(extracted_list_ys);
+        keep_payload_and_alibi_blocks(extracted_list_ys_blocks, extracted_list_xs.length_Ts());
         uint num_extracted = extracted_list_xs.length_Ts();
         rep_array_unsliced<block> cleanse_bottom_level_circuit_input(num_extracted);
         rep_array_unsliced<block> cleanse_bottom_level_circuit_output(num_extracted);
@@ -623,9 +605,9 @@ private:
 
         if (!had_initial_bottom_level)
         {
-            const uint blocks_per_elem = blocks_per_packed_xy_for<YType>();
-            const uint elem_stride = packed_xy_stride_for<YType>();
-            const uint y_bytes = y_type_bytes_of<YType>();
+            const uint blocks_per_elem = runtime_width_spec.packed_elem_blocks;
+            const uint elem_stride = runtime_width_spec.packed_elem_blocks * sizeof(block);
+            const uint y_bytes = runtime_width_spec.payload_bytes;
             // Create wider sort array: each element is BLOCKS_PER_PACKED_XY blocks
             //   layout: is_dummy(4B) | x(4B) | y(Y_TYPE_BYTES) | padding
             rep_array_unsliced<block> sort_array(num_extracted * blocks_per_elem);
@@ -639,18 +621,26 @@ private:
                 sort_array.copy_bytes_from(extracted_list_xs, sizeof(x_type),
                     sizeof(x_type) * i, i * elem_stride + sizeof(x_type));
                 // Copy y data
-                sort_array.copy_bytes_from(extracted_list_ys, y_bytes,
-                    sizeof(YType) * i, i * elem_stride + 2 * sizeof(x_type));
+                sort_array.copy_bytes_from(
+                    extracted_list_ys_blocks,
+                    y_bytes,
+                    static_cast<uint64_t>(i) * runtime_width_spec.y_stride_bytes,
+                    i * elem_stride + 2 * sizeof(x_type)
+                );
             }
             batcher::sort<block>(compare_swap_circuit_local, sort_array, blocks_per_elem);
             uint num_to_extract = cleansed_for_bottom_level_xs.length_Ts();
             for (uint i = 0; i < num_to_extract; i++) {
                 cleansed_for_bottom_level_xs.copy_bytes_from(sort_array, sizeof(x_type),
                     i * elem_stride + sizeof(x_type), sizeof(x_type) * i);
-                cleansed_for_bottom_level_ys.copy_bytes_from(sort_array, y_bytes,
-                    i * elem_stride + 2 * sizeof(x_type), sizeof(YType) * i);
+                cleansed_for_bottom_level_ys_blocks.copy_bytes_from(
+                    sort_array,
+                    y_bytes,
+                    i * elem_stride + 2 * sizeof(x_type),
+                    static_cast<uint64_t>(i) * runtime_width_spec.y_stride_bytes
+                );
             }
-            keep_payload_and_alibi(cleansed_for_bottom_level_ys);
+            keep_payload_and_alibi_blocks(cleansed_for_bottom_level_ys_blocks, num_to_extract);
             sort_array.destroy();
             relabel_dummies(cleansed_for_bottom_level_xs, log_N);
         }
@@ -663,11 +653,17 @@ private:
             for (uint i = 0 ; i < num_extracted ; i++) {
                 if (getLSB(is_dummy[i])) continue;
                 cleansed_for_bottom_level_xs.copy_one(num_real_els_found, extracted_list_xs, i);
-                cleansed_for_bottom_level_ys.copy_one(num_real_els_found, extracted_list_ys, i);
+                cleansed_for_bottom_level_ys_blocks.copy_bytes_from(
+                    extracted_list_ys_blocks,
+                    runtime_width_spec.payload_bytes,
+                    static_cast<uint64_t>(i) * runtime_width_spec.y_stride_bytes,
+                    static_cast<uint64_t>(num_real_els_found) * runtime_width_spec.y_stride_bytes
+                );
                 num_real_els_found++;
             }
             // every real element in the DORAM should be collected here
             assert(num_real_els_found == cleansed_for_bottom_level_xs.length_Ts());
+            keep_payload_and_alibi_blocks(cleansed_for_bottom_level_ys_blocks, num_real_els_found);
             cleanse_bottom_level_circuit_input.destroy();
             cleanse_bottom_level_circuit_output.destroy();
         }
@@ -709,20 +705,28 @@ private:
     void insert_stash(uint level_num)
     {
         assert((level_num < num_levels) && (ohtables[level_num] != nullptr));
-        OHTableArrayT<YType> *cur_ohtable = ohtables[level_num];
-
-        YType alibi_mask = get_all_zero_except_nth_from_highest<YType>(level_num);
+        OHTableArray *cur_ohtable = ohtables[level_num];
 
         rep_array_unsliced<x_type> stash_xs = cur_ohtable->stash_xs;
-        rep_array_unsliced<YType> stash_ys = cur_ohtable->stash_ys;
-
-        keep_payload_only(stash_ys);
-        stash_ys.apply_or_mask(alibi_mask);
-
-        // stash_xs.debug_print("stash_xs");
-        // stash_ys.debug_print("stash_ys");
-
-        stupid_level->write(stash_xs, stash_ys);
+        rep_array_unsliced<block> stash_ys_blocks(stash_xs.length_Ts() * runtime_width_spec.y_blocks);
+        stash_ys_blocks.copy(cur_ohtable->stash_ys_blocks);
+        keep_payload_only_blocks(stash_ys_blocks, stash_xs.length_Ts());
+        for (uint64_t i = 0; i < stash_xs.length_Ts(); ++i) {
+            runtime_y_ops::set_alibi_bit(
+                reinterpret_cast<uint8_t*>(stash_ys_blocks.mut_prev_data()) +
+                    i * runtime_width_spec.y_stride_bytes,
+                level_num,
+                runtime_width_spec
+            );
+            runtime_y_ops::set_alibi_bit(
+                reinterpret_cast<uint8_t*>(stash_ys_blocks.mut_next_data()) +
+                    i * runtime_width_spec.y_stride_bytes,
+                level_num,
+                runtime_width_spec
+            );
+        }
+        stupid_level->write_blocks(stash_xs, stash_ys_blocks);
+        stash_ys_blocks.destroy();
     }
 
     // clears teh heirchical structure and 0's the state
@@ -737,12 +741,26 @@ private:
         }
     }
 
-    void extract_alibi_bits(rep_array_unsliced<YType> y_accum, rep_array_unsliced<int> alibi_mask) {
-        for (uint i = 0; i < num_levels; i++)
-        {
-            // this is not wrong because we're using y_accum (not y)
-            // so won't be reset to 0 if not found at level after found
-            y_accum.extract_bit_xor(y_type_bits() - 1 - i, alibi_mask.window(i, 1));
+    void extract_alibi_bits_blocks(
+        rep_array_unsliced<block> y_accum_blocks,
+        rep_array_unsliced<int> alibi_mask) {
+        for (uint i = 0; i < num_levels; i++) {
+            const uint32_t bit_index = runtime_width_spec.total_bits - 1 - i;
+            const bool prev_bit = runtime_y_ops::get_bit_from_y_window(
+                reinterpret_cast<const uint8_t*>(y_accum_blocks.prev_data()),
+                bit_index,
+                runtime_width_spec
+            );
+            const bool next_bit = runtime_y_ops::get_bit_from_y_window(
+                reinterpret_cast<const uint8_t*>(y_accum_blocks.next_data()),
+                bit_index,
+                runtime_width_spec
+            );
+            rep_array_unsliced<int> bit_share(1);
+            bit_share.mut_prev_data()[0] = prev_bit ? 1 : 0;
+            bit_share.mut_next_data()[0] = next_bit ? 1 : 0;
+            alibi_mask.window(i, 1).xor_with(bit_share);
+            bit_share.destroy();
         }
     }
 
@@ -750,30 +768,198 @@ private:
     // reinserted elements for anything more than building stupid into l0, which worked
 };
 
-class RuntimeDORAM {
+class RuntimeDORAMCore {
   public:
-    explicit RuntimeDORAM(
+    RuntimeDORAMCore(uint active_payload_bits, uint num_levels)
+        : active_payload_bits_(active_payload_bits),
+          num_levels_(num_levels),
+          active_payload_bytes_(active_payload_bits / 8),
+          active_y_blocks_(0),
+          required_total_bits_(0),
+          required_bytes_(0) {
+        if (active_payload_bits_ == 0 || (active_payload_bits_ % 8) != 0) {
+            throw std::invalid_argument("active_payload_bits must be > 0 and divisible by 8");
+        }
+        required_total_bits_ = runtime_width::checked_u32_add(
+            active_payload_bits_, num_levels, "RuntimeDORAM required total bits"
+        );
+        required_bytes_ = (required_total_bits_ + 7U) / 8U;
+        active_y_blocks_ = runtime_width::y_blocks_for_total_bits(required_total_bits_);
+        if (active_y_blocks_ == 0) {
+            throw std::invalid_argument(
+                "runtime y block count must be > 0 (payload_bits=" +
+                std::to_string(active_payload_bits_) +
+                ", num_levels=" + std::to_string(num_levels_) +
+                ", total_bits=" + std::to_string(required_total_bits_) + ")"
+            );
+        }
+    }
+
+    uint active_payload_bits() const {
+        return active_payload_bits_;
+    }
+
+    uint active_payload_bytes() const {
+        return active_payload_bytes_;
+    }
+
+    uint active_y_blocks() const {
+        return active_y_blocks_;
+    }
+
+    uint32_t required_bytes() const {
+        return required_bytes_;
+    }
+
+    runtime_width::RuntimeWidthSpec runtime_width_spec() const {
+        return runtime_width::make_runtime_width_spec(
+            active_payload_bits_,
+            num_levels_,
+            required_total_bits_
+        );
+    }
+
+    uint64_t expected_blocks_for_rows(uint64_t row_count, const char* ctx) const {
+        return runtime_width::checked_u64_mul(
+            row_count, static_cast<uint64_t>(active_y_blocks_), ctx
+        );
+    }
+
+    uint64_t rows_for_block_len(uint64_t block_len, const char* ctx) const {
+        if (block_len % static_cast<uint64_t>(active_y_blocks_) != 0) {
+            throw std::invalid_argument(
+                std::string(ctx) + ": block length does not match runtime block layout"
+            );
+        }
+        return block_len / static_cast<uint64_t>(active_y_blocks_);
+    }
+
+    void validate_query_shape(
+        const rep_array_unsliced<x_type>& qry_x,
+        const rep_array_unsliced<block>& qry_y_blocks,
+        const char* ctx) const {
+        const uint64_t expected_blocks = expected_blocks_for_rows(
+            qry_x.length_Ts(), ctx
+        );
+        if (qry_y_blocks.length_Ts() != expected_blocks) {
+            throw std::invalid_argument("qry_y_blocks length mismatch for runtime y layout");
+        }
+    }
+
+  private:
+    uint active_payload_bits_;
+    uint num_levels_;
+    uint active_payload_bytes_;
+    uint active_y_blocks_;
+    uint32_t required_total_bits_;
+    uint32_t required_bytes_;
+};
+
+class RuntimeDORAMEngine final {
+  public:
+    RuntimeDORAMEngine(
         uint log_address_space_size,
-        rep_array_unsliced<y_type> *ys_no_dummy_room,
+        rep_array_unsliced<block> *ys_no_dummy_room_blocks,
         uint num_levels,
         uint log_amp_factor,
         BristolFashion_array* xy_if_xs_equal_circuit_local,
         BristolFashion_array* compare_swap_circuit_local,
-        uint active_payload_bits = y_type_bits_of<y_type>())
-        : inner_(std::make_unique<DORAMT<y_type>>(
+        const RuntimeDORAMCore& core)
+        : core_(core),
+          inner_(std::make_unique<DORAM>(
               log_address_space_size,
-              ys_no_dummy_room,
               num_levels,
               log_amp_factor,
               xy_if_xs_equal_circuit_local,
               compare_swap_circuit_local,
-              active_payload_bits)) {}
+              core_.active_payload_bits(),
+              ys_no_dummy_room_blocks)) {
+    }
 
-    rep_array_unsliced<y_type> read_and_write(
+    rep_array_unsliced<block> read_and_write_blocks(
         rep_array_unsliced<x_type> qry_x,
-        rep_array_unsliced<y_type> qry_y,
+        rep_array_unsliced<block> qry_y_blocks,
         rep_array_unsliced<int> is_write) {
-        return inner_->read_and_write(qry_x, qry_y, is_write);
+        core_.validate_query_shape(
+            qry_x, qry_y_blocks, "RuntimeDORAMEngine query block count"
+        );
+        return inner_->read_and_write_blocks(qry_x, qry_y_blocks, is_write);
+    }
+
+    uint get_num_levels() const {
+        return inner_->get_num_levels();
+    }
+
+  private:
+    RuntimeDORAMCore core_;
+    std::unique_ptr<DORAM> inner_;
+};
+
+class RuntimeDORAMBackend {
+  public:
+    RuntimeDORAMBackend(
+        uint log_address_space_size,
+        rep_array_unsliced<block> *ys_no_dummy_room_blocks,
+        uint num_levels,
+        uint log_amp_factor,
+        BristolFashion_array* xy_if_xs_equal_circuit_local,
+        BristolFashion_array* compare_swap_circuit_local,
+        const RuntimeDORAMCore& core)
+        : inner_(std::make_unique<RuntimeDORAMEngine>(
+              log_address_space_size,
+              ys_no_dummy_room_blocks,
+              num_levels,
+              log_amp_factor,
+              xy_if_xs_equal_circuit_local,
+              compare_swap_circuit_local,
+              core)) {
+    }
+
+    rep_array_unsliced<block> read_and_write_blocks(
+        rep_array_unsliced<x_type> qry_x,
+        rep_array_unsliced<block> qry_y_blocks,
+        rep_array_unsliced<int> is_write) {
+        return inner_->read_and_write_blocks(qry_x, qry_y_blocks, is_write);
+    }
+
+    uint get_num_levels() const {
+        return inner_->get_num_levels();
+    }
+
+  private:
+    std::unique_ptr<RuntimeDORAMEngine> inner_;
+};
+
+class RuntimeDORAM {
+  public:
+    explicit RuntimeDORAM(
+        uint log_address_space_size,
+        rep_array_unsliced<block> *ys_no_dummy_room_blocks,
+        uint num_levels,
+        uint log_amp_factor,
+        BristolFashion_array* xy_if_xs_equal_circuit_local,
+        BristolFashion_array* compare_swap_circuit_local,
+        uint active_payload_bits)
+        : core_(active_payload_bits, num_levels),
+          inner_(nullptr) {
+        inner_ = std::make_unique<RuntimeDORAMBackend>(
+            log_address_space_size,
+            ys_no_dummy_room_blocks,
+            num_levels,
+            log_amp_factor,
+            xy_if_xs_equal_circuit_local,
+            compare_swap_circuit_local,
+            core_
+        );
+    }
+
+    rep_array_unsliced<block> read_and_write_blocks(
+        rep_array_unsliced<x_type> qry_x,
+        rep_array_unsliced<block> qry_y_blocks,
+        rep_array_unsliced<int> is_write) {
+        core_.validate_query_shape(qry_x, qry_y_blocks, "RuntimeDORAM query block count");
+
+        return inner_->read_and_write_blocks(qry_x, qry_y_blocks, is_write);
     }
 
     uint get_num_levels() {
@@ -781,7 +967,8 @@ class RuntimeDORAM {
     }
 
   private:
-    std::unique_ptr<DORAMT<y_type>> inner_;
+    RuntimeDORAMCore core_;
+    std::unique_ptr<RuntimeDORAMBackend> inner_;
 };
 
 } // namespace emp
