@@ -6,6 +6,7 @@
 #include "sh_shuffle_array.h"
 #include "sh_rep_array.h"
 #include "bristol_fashion_array.h"
+#include "runtime_width.h"
 #include "utils.h"
 #include "globals.h"
 
@@ -77,6 +78,9 @@ private:
     rep_array_unsliced<YType> ys_receiver_order;
     block* cht_2shares;
     LocalPermutation* receiver_shuffle;
+    bool has_runtime_width_spec;
+    runtime_width::RuntimeWidthSpec runtime_width_spec;
+    YType payload_and_alibi_mask;
 
     uint query_count = 0;
 
@@ -85,7 +89,8 @@ private:
 public:
     OHTableArrayT(const OHTableParams& params,
     rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys, 
-    rep_array_unsliced<block> key)
+    rep_array_unsliced<block> key,
+    const runtime_width::RuntimeWidthSpec* runtime_spec = nullptr)
     :params(params),
     key(key),
     stash_xs(params.stash_size),
@@ -96,6 +101,9 @@ public:
     dummy_indices(params.num_dummies),
     xs_receiver_order(params.total_size()),
     ys_receiver_order(params.total_size()),
+    has_runtime_width_spec(runtime_spec != nullptr),
+    runtime_width_spec(runtime_spec != nullptr ? *runtime_spec : runtime_width::RuntimeWidthSpec{}),
+    payload_and_alibi_mask{},
     touched(params.total_size())
     {
         assert(xs.length_Ts() == params.num_elements);
@@ -103,6 +111,7 @@ public:
         assert(key.length_Ts() == prf_key_size_blocks());
 
         params.validate();
+        init_runtime_masks();
         
         build(xs, ys);
     }
@@ -119,6 +128,7 @@ public:
 
     void build(rep_array_unsliced<x_type> xs, rep_array_unsliced<YType> ys) {
         using namespace thread_unsafe;
+        keep_payload_and_alibi(ys);
         // compute qs
         uint prf_input_size_blocks = prf_key_size_blocks() + 1;
         rep_array_unsliced<block> keys_and_inputs(prf_input_size_blocks * params.num_elements);
@@ -260,6 +270,7 @@ public:
             stash_xs.copy_one(i, xs_receiver_order, stash_indices_receiver[i]);
             stash_ys.copy_one(i, ys_receiver_order, stash_indices_receiver[i]);
         }
+        keep_payload_and_alibi(stash_ys);
         // seems to be double counting the effect of reinserting the stash_size elements
         // query_count = params.stash_size;
 
@@ -316,6 +327,7 @@ public:
         touched[index_receiver_order] = true;
 
         y.copy_one(0, ys_receiver_order, index_receiver_order);
+        keep_payload_and_alibi(y);
         query_count++;
         time_after_cht = time_from(start);
     }
@@ -329,7 +341,29 @@ public:
             extract_ys.copy_one(num_extracted, ys_receiver_order, i);
             num_extracted++;
         }
+        keep_payload_and_alibi(extract_ys);
         assert(num_extracted == params.num_elements - params.stash_size);
+    }
+
+private:
+    void init_runtime_masks() {
+        if (!has_runtime_width_spec) {
+            return;
+        }
+        assert(runtime_width_spec.total_bits == 8 * sizeof(YType));
+        payload_and_alibi_mask = get_all_ones_rightshifted_by<YType>(
+            runtime_width_spec.total_bits - runtime_width_spec.payload_bits
+        );
+        for (uint i = 0; i < runtime_width_spec.alibi_bits; i++) {
+            payload_and_alibi_mask |= get_all_zero_except_nth_from_highest<YType>(i);
+        }
+    }
+
+    inline void keep_payload_and_alibi(rep_array_unsliced<YType> ys) {
+        if (!has_runtime_width_spec) {
+            return;
+        }
+        ys.apply_and_mask(payload_and_alibi_mask);
     }
 };
 

@@ -4,10 +4,12 @@
 #include "debug.h"
 #include "globals.h" //player's global prgs&ios
 #include "ohtable_array.h"
+#include "runtime_width.h"
 #include "stupid_level.h"
 #include "batcher.h"
 
 #include <fstream>     //log
+#include <memory>
 #include <sys/types.h> // uint
 
 //#define q_type block;
@@ -34,6 +36,7 @@ class DORAMT
     rep_array_unsliced<block> prf_keys;
     YType payload_mask;
     YType payload_and_alibi_mask;
+    runtime_width::RuntimeWidthSpec runtime_width_spec;
 
     uint log_sls, stupid_fill_time, stash_size; // params set by testing 
     uint amp_factor;
@@ -46,7 +49,7 @@ class DORAMT
     //* first level after stupid level is 0
     //* bottom level is num_levels - 1
     vector<OHTableArrayT<YType>*> ohtables;
-    StupidLevelT<YType> *stupid_level; 
+    RuntimeStupidLevelT<YType> *stupid_level;
 
     //?all the other ohtable params: make a struct?
     vector<uint> base_b_state_vec;
@@ -72,14 +75,14 @@ public:
         compare_swap_circuit_local(compare_swap_circuit_local),
         prf_keys(num_levels * prf_key_size_blocks()),
         payload_mask{},
-        payload_and_alibi_mask{}
+        payload_and_alibi_mask{},
+        runtime_width_spec{}
     {
         assert(xy_if_xs_equal_circuit_local != nullptr);
         assert(this->compare_swap_circuit_local != nullptr);
-        assert(this->active_payload_bits > 0);
-        assert(this->active_payload_bits <= y_type_bits());
-        assert((this->active_payload_bits % 8) == 0);
-        assert(num_levels < y_type_bits());
+        runtime_width_spec = runtime_width::make_runtime_width_spec(
+            this->active_payload_bits, num_levels, y_type_bits()
+        );
         init_runtime_masks();
         // input should be 1 shorter than address space size
         if (ys_no_dummy_room == nullptr) {
@@ -98,8 +101,10 @@ public:
                    1); // sanity check on decide params. -1 becasue we don't include 0 or 2^N
         dbg("initialized DORAM params");
 
-        //*init stupid
-        stupid_level = new StupidLevelT<YType>(1 << log_sls, xy_if_xs_equal_circuit_local);
+        //*init stupid (runtime-width path)
+        stupid_level = new RuntimeStupidLevelT<YType>(
+            1 << log_sls, xy_if_xs_equal_circuit_local, runtime_width_spec
+        );
 
         //*sanity checks
         assert("must have at least 1 level (+ stupid level which is automatically included) in the DORAM!" &&
@@ -151,9 +156,11 @@ private:
     }
 
     void init_runtime_masks() {
-        payload_mask = get_all_ones_rightshifted_by<YType>(y_type_bits() - active_payload_bits);
+        payload_mask = get_all_ones_rightshifted_by<YType>(
+            runtime_width_spec.total_bits - runtime_width_spec.payload_bits
+        );
         payload_and_alibi_mask = payload_mask;
-        for (uint i = 0; i < num_levels; i++) {
+        for (uint i = 0; i < runtime_width_spec.alibi_bits; i++) {
             payload_and_alibi_mask |= get_all_zero_except_nth_from_highest<YType>(i);
         }
     }
@@ -249,7 +256,9 @@ private:
         params.cht_log_single_col_len = get_log_col_len(level_num);
         rep_array_unsliced<block> key = generate_prf_key(level_num);
 
-        OHTableArrayT<YType>* new_ohtable = new OHTableArrayT<YType>(params, xs, ys, key);
+        OHTableArrayT<YType>* new_ohtable = new OHTableArrayT<YType>(
+            params, xs, ys, key, &runtime_width_spec
+        );
 
         time_total_builds[level_num] += time_from(_start);
 
@@ -739,6 +748,40 @@ private:
 
     // this is the old version of this function. Because I tried to do it with no reinserting, I was short on the
     // reinserted elements for anything more than building stupid into l0, which worked
+};
+
+class RuntimeDORAM {
+  public:
+    explicit RuntimeDORAM(
+        uint log_address_space_size,
+        rep_array_unsliced<y_type> *ys_no_dummy_room,
+        uint num_levels,
+        uint log_amp_factor,
+        BristolFashion_array* xy_if_xs_equal_circuit_local,
+        BristolFashion_array* compare_swap_circuit_local,
+        uint active_payload_bits = y_type_bits_of<y_type>())
+        : inner_(std::make_unique<DORAMT<y_type>>(
+              log_address_space_size,
+              ys_no_dummy_room,
+              num_levels,
+              log_amp_factor,
+              xy_if_xs_equal_circuit_local,
+              compare_swap_circuit_local,
+              active_payload_bits)) {}
+
+    rep_array_unsliced<y_type> read_and_write(
+        rep_array_unsliced<x_type> qry_x,
+        rep_array_unsliced<y_type> qry_y,
+        rep_array_unsliced<int> is_write) {
+        return inner_->read_and_write(qry_x, qry_y, is_write);
+    }
+
+    uint get_num_levels() {
+        return inner_->get_num_levels();
+    }
+
+  private:
+    std::unique_ptr<DORAMT<y_type>> inner_;
 };
 
 } // namespace emp
