@@ -29,8 +29,11 @@ class DORAMT
     uint log_address_space_size; 
     uint num_levels; 
     uint log_amp_factor;
+    uint active_payload_bits;
     BristolFashion_array* compare_swap_circuit_local;
     rep_array_unsliced<block> prf_keys;
+    YType payload_mask;
+    YType payload_and_alibi_mask;
 
     uint log_sls, stupid_fill_time, stash_size; // params set by testing 
     uint amp_factor;
@@ -59,22 +62,32 @@ public:
         uint num_levels,
         uint log_amp_factor,
         BristolFashion_array* xy_if_xs_equal_circuit_local,
-        BristolFashion_array* compare_swap_circuit_local)
+        BristolFashion_array* compare_swap_circuit_local,
+        uint active_payload_bits = y_type_bits_of<YType>())
         : 
         log_address_space_size(log_address_space_size),
         num_levels(num_levels),
         log_amp_factor(log_amp_factor),
+        active_payload_bits(active_payload_bits),
         compare_swap_circuit_local(compare_swap_circuit_local),
-        prf_keys(num_levels * prf_key_size_blocks())
+        prf_keys(num_levels * prf_key_size_blocks()),
+        payload_mask{},
+        payload_and_alibi_mask{}
     {
         assert(xy_if_xs_equal_circuit_local != nullptr);
         assert(this->compare_swap_circuit_local != nullptr);
+        assert(this->active_payload_bits > 0);
+        assert(this->active_payload_bits <= y_type_bits());
+        assert((this->active_payload_bits % 8) == 0);
+        assert(num_levels < y_type_bits());
+        init_runtime_masks();
         // input should be 1 shorter than address space size
         if (ys_no_dummy_room == nullptr) {
             had_initial_bottom_level = false;
         } else {
             had_initial_bottom_level = true;
             assert((1U << log_address_space_size) - 1 == ys_no_dummy_room->length_Ts());
+            ys_no_dummy_room->apply_and_mask(payload_mask);
         }
 
         dbg("Initializing DORAM");
@@ -137,6 +150,22 @@ private:
         return y_type_bytes_of<YType>();
     }
 
+    void init_runtime_masks() {
+        payload_mask = get_all_ones_rightshifted_by<YType>(y_type_bits() - active_payload_bits);
+        payload_and_alibi_mask = payload_mask;
+        for (uint i = 0; i < num_levels; i++) {
+            payload_and_alibi_mask |= get_all_zero_except_nth_from_highest<YType>(i);
+        }
+    }
+
+    inline void keep_payload_only(rep_array_unsliced<YType> &ys) {
+        ys.apply_and_mask(payload_mask);
+    }
+
+    inline void keep_payload_and_alibi(rep_array_unsliced<YType> &ys) {
+        ys.apply_and_mask(payload_and_alibi_mask);
+    }
+
     void decide_params()
     {
         d = use_proven_cht_bounds ? 2 : 1.2;
@@ -195,6 +224,7 @@ private:
         auto _start = clock_start();
 
         assert(level_num < num_levels);
+        keep_payload_and_alibi(ys);
         if (level_num == num_levels - 1)
         {
             base_b_state_vec[level_num] = 1;
@@ -326,6 +356,7 @@ private:
     {
         using namespace thread_unsafe;
         assert(is_write.length_bytes > 0);
+        keep_payload_only(qry_y);
 
         //*set up global params
         // todo can reuse this mem
@@ -388,6 +419,7 @@ private:
         time_total_query_stupid += time_from(query_stupid_start);
 
         assert(is_write.length_bytes > 0);
+        keep_payload_and_alibi(y_accum);
         extract_alibi_bits(y_accum, alibi_mask);
 
         //__print_replicated_val(found, "found (after qry stupid) is");
@@ -409,10 +441,12 @@ private:
                 rep_array_unsliced<YType> y_returned(1);
                 rep_array_unsliced<int> found_returned(1);
                 ohtables[i]->query(prf_output.window(i, 1), use_dummy, y_returned, found_returned);
+                keep_payload_and_alibi(y_returned);
 
                 y_accum.xor_with(y_returned);
                 found.xor_with(found_returned);
 
+                keep_payload_and_alibi(y_accum);
                 extract_alibi_bits(y_accum, alibi_mask);
                 //__print_replicated_val(found, "after querying level " + to_string(i) + " found is now:");
             }
@@ -422,12 +456,12 @@ private:
 
         rep_array_unsliced<YType> write_y(1);
         rep_exec->if_then_else(is_write, qry_y, y_accum, write_y);
-        // reset alibi mask for this element to 0
-        write_y.apply_and_mask(get_all_ones_rightshifted_by<YType>(num_levels));
+        // Keep only active payload bits; drop alibi and inactive slack bits.
+        keep_payload_only(write_y);
         stupid_level->write(qry_x, write_y);
 
-        // reset alibi mask for returned y value as well
-        y_accum.apply_and_mask(get_all_ones_rightshifted_by<YType>(num_levels));
+        // Return payload-only value to caller.
+        keep_payload_only(y_accum);
 
         time_total_queries += time_from(_start);
         return y_accum;
@@ -502,6 +536,7 @@ private:
             num_extracted += num_elements_at(i);
         }
         assert(num_extracted == tot_num_to_extract);
+        keep_payload_and_alibi(extracted_list_ys);
 
         //*we now have all the xs and the ys into a list, let's re-number the dummies
 
@@ -566,6 +601,7 @@ private:
         uint log_N
         )
     {
+        keep_payload_and_alibi(extracted_list_ys);
         uint num_extracted = extracted_list_xs.length_Ts();
         rep_array_unsliced<block> cleanse_bottom_level_circuit_input(num_extracted);
         rep_array_unsliced<block> cleanse_bottom_level_circuit_output(num_extracted);
@@ -584,6 +620,8 @@ private:
             // Create wider sort array: each element is BLOCKS_PER_PACKED_XY blocks
             //   layout: is_dummy(4B) | x(4B) | y(Y_TYPE_BYTES) | padding
             rep_array_unsliced<block> sort_array(num_extracted * blocks_per_elem);
+            std::vector<block> zero_blocks(num_extracted * blocks_per_elem, makeBlock(0, 0));
+            sort_array.input_public(zero_blocks.data());
             for (uint i = 0; i < num_extracted; i++) {
                 // Copy is_dummy result from dummy_check output (first sizeof(x_type) bytes)
                 sort_array.copy_bytes_from(cleanse_bottom_level_circuit_output, sizeof(x_type),
@@ -603,6 +641,7 @@ private:
                 cleansed_for_bottom_level_ys.copy_bytes_from(sort_array, y_bytes,
                     i * elem_stride + 2 * sizeof(x_type), sizeof(YType) * i);
             }
+            keep_payload_and_alibi(cleansed_for_bottom_level_ys);
             sort_array.destroy();
             relabel_dummies(cleansed_for_bottom_level_xs, log_N);
         }
@@ -668,6 +707,7 @@ private:
         rep_array_unsliced<x_type> stash_xs = cur_ohtable->stash_xs;
         rep_array_unsliced<YType> stash_ys = cur_ohtable->stash_ys;
 
+        keep_payload_only(stash_ys);
         stash_ys.apply_or_mask(alibi_mask);
 
         // stash_xs.debug_print("stash_xs");
