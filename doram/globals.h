@@ -59,15 +59,15 @@ SHRepArray **rep_execs;
 
 namespace thread_unsafe {
 
-PRG *prev_prg;
-PRG *next_prg;
+thread_local PRG *prev_prg;
+thread_local PRG *next_prg;
 // does private_prg really need to be thread_unsafe?
-PRG *private_prg;
-PRG *shared_prg;
+thread_local PRG *private_prg;
+thread_local PRG *shared_prg;
 
-RepNetIO *prev_io;
-RepNetIO *next_io;
-SHRepArray *rep_exec;
+thread_local RepNetIO *prev_io;
+thread_local RepNetIO *next_io;
+thread_local SHRepArray *rep_exec;
 
 }
 
@@ -76,17 +76,17 @@ fstream timing_file;
 fstream special_debug_file;
 
 // ignore setup
-double time_total = 0;         
-vector<double> time_total_builds;
-double time_total_build_prf = 0;
-double time_total_batcher = 0;
-double time_total_deletes = 0; 
-double time_total_queries = 0;
-double time_total_query_prf = 0;
-double time_total_query_stupid = 0;
-double time_total_shuffles = 0;
-double time_total_cht_build = 0;
-double time_total_transpose = 0;
+thread_local double time_total = 0;
+thread_local vector<double> time_total_builds;
+thread_local double time_total_build_prf = 0;
+thread_local double time_total_batcher = 0;
+thread_local double time_total_deletes = 0;
+thread_local double time_total_queries = 0;
+thread_local double time_total_query_prf = 0;
+thread_local double time_total_query_stupid = 0;
+thread_local double time_total_shuffles = 0;
+thread_local double time_total_cht_build = 0;
+thread_local double time_total_transpose = 0;
 
 // The following timings are not thread safe and commented out for now
 /*
@@ -98,7 +98,7 @@ double time_main_loop = 0;
 
 // double time_total_network = 0; // defined in rep_net_io to avoid include problem, can still be accessed globaly
 
-double time_doram_constructor = 0; //? what is this for?
+thread_local double time_doram_constructor = 0; //? what is this for?
 
 typedef unsigned long long ull;
 

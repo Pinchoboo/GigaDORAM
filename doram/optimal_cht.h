@@ -17,7 +17,7 @@ using namespace thread_unsafe;
 // Set me in main!
 sh_riro::Circuit* lookup_circuit;
 
-double time_in_circuit, time_before_circuit, time_after_circuit;
+thread_local double time_in_circuit, time_before_circuit, time_after_circuit;
 // some special values that fit into a uint
 // as signed ints, these are -1, -2, -3, etc
 const uint NONE = -1;

@@ -21,10 +21,10 @@ namespace emp
 namespace riro 
 {
 
-double time_create_eva;
-double time_eval;
-double time_eval_before_compute;
-double time_eval_compute;
+thread_local double time_create_eva;
+thread_local double time_eval;
+thread_local double time_eval_before_compute;
+thread_local double time_eval_compute;
 
 enum Role {
     GARBLER_1, GARBLER_2

@@ -22,9 +22,9 @@ namespace sh_riro
 {
 using namespace thread_unsafe;
 
-double time_before_compute;
-double time_compute;
-double time_after_compute;
+thread_local double time_before_compute;
+thread_local double time_compute;
+thread_local double time_after_compute;
 
 enum Role {
     GARBLER_1, GARBLER_2

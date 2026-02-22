@@ -22,7 +22,7 @@ uint prf_key_size_blocks() {
     return prf_circuit->num_input/bits_per_block - 1;
 }
 
-double time_before_cht, time_in_cht, time_after_cht, time_ite;
+thread_local double time_before_cht, time_in_cht, time_after_cht, time_ite;
 
 struct OHTableParams
 {

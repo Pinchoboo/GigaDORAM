@@ -21,7 +21,7 @@ using namespace std;
 
 namespace emp
 {
-double time_total_network = 0;
+thread_local double time_total_network = 0;
 class RepSubChannel
 {
   public:
