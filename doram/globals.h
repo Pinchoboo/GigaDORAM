@@ -59,15 +59,15 @@ SHRepArray **rep_execs;
 
 namespace thread_unsafe {
 
-PRG *prev_prg;
-PRG *next_prg;
+thread_local PRG *prev_prg;
+thread_local PRG *next_prg;
 // does private_prg really need to be thread_unsafe?
-PRG *private_prg;
-PRG *shared_prg;
+thread_local PRG *private_prg;
+thread_local PRG *shared_prg;
 
-RepNetIO *prev_io;
-RepNetIO *next_io;
-SHRepArray *rep_exec;
+thread_local RepNetIO *prev_io;
+thread_local RepNetIO *next_io;
+thread_local SHRepArray *rep_exec;
 
 }
 
