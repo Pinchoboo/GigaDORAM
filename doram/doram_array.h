@@ -277,7 +277,7 @@ private:
                 // do nothing because base_b_state_vec[lvl] will be incremented in new_ohtable_of_level
             }
         }
-        time_total_deletes += time_from(_start);
+        DORAM_TIMING_ADD(time_total_deletes, time_from(_start));
     }
 
     rep_array_unsliced<block> generate_prf_key(uint level_num) {
@@ -392,11 +392,11 @@ private:
         rep_array_unsliced<block> prf_output(num_levels);
         auto query_prf_start = clock_start();
         prf_circuit->compute(prf_output, prf_input, num_levels, rep_exec);
-        time_total_query_prf += time_from(query_prf_start);
+        DORAM_TIMING_ADD(time_total_query_prf, time_from(query_prf_start));
 
         auto query_stupid_start = clock_start();
         stupid_level->query_blocks(qry_x, y_accum_blocks, found);
-        time_total_query_stupid += time_from(query_stupid_start);
+        DORAM_TIMING_ADD(time_total_query_stupid, time_from(query_stupid_start));
 
         keep_payload_and_alibi_blocks(y_accum_blocks);
         extract_alibi_bits_blocks(y_accum_blocks, alibi_mask);
@@ -438,7 +438,7 @@ private:
 
         keep_payload_only_blocks(y_accum_blocks);
 
-        time_total_queries += time_from(_start);
+        DORAM_TIMING_ADD(time_total_queries, time_from(_start));
         alibi_mask.destroy();
         found.destroy();
         use_dummy.destroy();

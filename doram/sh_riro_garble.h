@@ -22,9 +22,15 @@ namespace sh_riro
 {
 using namespace thread_unsafe;
 
-double time_before_compute;
-double time_compute;
-double time_after_compute;
+#if DORAM_TIMING_ENABLED
+inline thread_local double time_before_compute = 0;
+inline thread_local double time_compute = 0;
+inline thread_local double time_after_compute = 0;
+#else
+inline double time_before_compute = 0;
+inline double time_compute = 0;
+inline double time_after_compute = 0;
+#endif
 
 enum Role {
     GARBLER_1, GARBLER_2
@@ -147,11 +153,11 @@ void garble(Role which_garbler, BristolFashion_array &circuit_file, HalfGateGenC
 
     // circuit computation
     block *circuit_output_zero_keys = new block[circuit_output_length_bits];
-    time_before_compute = time_from(start);
+    DORAM_TIMING_SET(time_before_compute, time_from(start));
     start = clock_start();
     circuit_file.compute_garbled(circuit_output_zero_keys, circuit_input_zero_keys, gen);
     gen->io->flush();
-    time_compute = time_from(start);
+    DORAM_TIMING_SET(time_compute, time_from(start));
     start = clock_start();
 
     // now set output / process what's received from eval
@@ -168,7 +174,7 @@ void garble(Role which_garbler, BristolFashion_array &circuit_file, HalfGateGenC
         eval_full_io->recv_block(repl_output + circuit_output_length_blocks, circuit_output_length_blocks);
     }
 
-    time_after_compute = time_from(start);
+    DORAM_TIMING_SET(time_after_compute, time_from(start));
 
     // clean up memory
     delete[] input_zero_keys;
@@ -215,11 +221,11 @@ void eval(BristolFashion_array &circuit_file, HalfGateEva<GarbleIO> *eva, Regula
     }
 
     block *circuit_output_keys = new block[circuit_output_length_bits];
-    time_before_compute = time_from(start);
+    DORAM_TIMING_SET(time_before_compute, time_from(start));
     start = clock_start();
     eva->io->actually_receive();
     circuit_file.compute_garbled(circuit_output_keys, circuit_input_keys, eva);
-    time_compute = time_from(start);
+    DORAM_TIMING_SET(time_compute, time_from(start));
     start = clock_start();
 
     // repl_output = g1 eval | g2 eval | g1 g2
@@ -239,7 +245,7 @@ void eval(BristolFashion_array &circuit_file, HalfGateEva<GarbleIO> *eva, Regula
     // send g2 share to g2
     g2_io->send_block(repl_output + circuit_output_length_blocks, circuit_output_length_blocks);
 
-    time_after_compute = time_from(start);
+    DORAM_TIMING_SET(time_after_compute, time_from(start));
 
     // clean up memory
     delete[] input_keys;
@@ -249,7 +255,7 @@ void eval(BristolFashion_array &circuit_file, HalfGateEva<GarbleIO> *eva, Regula
 
 class Circuit {
 
-BristolFashion_array& circuit_file;
+BristolFashion_array circuit_file;
 RecvBufferIO<RepNetIO>* rb_io;
 HalfGateEva<RecvBufferIO<RepNetIO> > *half_gate_eva;
 SendBufferIO<RepNetIO>* sb_io;
@@ -258,7 +264,7 @@ AbandonIO* g2_abandon_io;
 HalfGateGenCustomPRG<AbandonIO>* prev_gen;
 
 public:
-Circuit(BristolFashion_array& circuit_file)
+Circuit(const BristolFashion_array& circuit_file)
 :circuit_file(circuit_file)
 {
     if (party == 1) {

@@ -2,6 +2,8 @@
 
 #include "emp-tool/emp-tool.h"
 #include "utils.h"
+#include <stdexcept>
+#include <string>
 
 namespace emp
 {
@@ -91,7 +93,12 @@ class LocalPermutation
 
     uint evaluate_at(uint input)
     {
-        assert(input < n);
+        if (input >= n) {
+            throw std::runtime_error(
+                "LocalPermutation::evaluate_at out of range: input=" +
+                std::to_string(input) + ", n=" + std::to_string(n)
+            );
+        }
         if (pi == nullptr) // then make the non fisher-yates version of the array
         {
             // we have that shuffle(arr)[pi[i]] = arr[i]

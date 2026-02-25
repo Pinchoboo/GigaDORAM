@@ -293,32 +293,19 @@ template<typename Circ_exec>
     }
 
     void compute_multithreaded(rep_array_unsliced<block> out, rep_array_unsliced<block> in, uint num_parallel_copies_of_circuit_not_threads) {
-        // TODO: better logic to spin up an optimal number of threads, rather than all of them
-        uint copies_per_thread = num_parallel_copies_of_circuit_not_threads / NUM_THREADS;
-        vector<thread> threads;
-        for (uint i = 0; i < NUM_THREADS; i++) {
-            uint thread_section_start_copies = i * copies_per_thread;
-            uint thread_section_length_copies = -1;
-            if (i == NUM_THREADS - 1) {
-                thread_section_length_copies = num_parallel_copies_of_circuit_not_threads - thread_section_start_copies;
-            } else {
-                thread_section_length_copies = copies_per_thread;
-            }
-            assert (thread_section_length_copies > 0);
-            assert (num_input % 128 == 0);
-            assert (num_output % 128 == 0);
-            uint num_input_blocks = num_input / 128;
-            uint num_output_blocks = num_output / 128;
-            rep_array_unsliced<block> out_section = out.window(thread_section_start_copies * num_output_blocks, 
-                thread_section_length_copies * num_output_blocks);
-            rep_array_unsliced<block> in_section = in.window(thread_section_start_copies * num_input_blocks, 
-                thread_section_length_copies * num_input_blocks);
-            // this calls the thread constructor and stores in the back of the vector
-            threads.emplace_back(compute_static, this, out_section, in_section, thread_section_length_copies, rep_execs[i]);
+        using namespace thread_unsafe;
+        // In lane-parallel wrapper execution, ORAM calls already run concurrently across lanes.
+        // Re-sharding a single ORAM call across global rep_execs[] introduces cross-lane contention
+        // on shared network channels and breaks protocol ordering. Execute in the currently bound lane.
+        if (rep_exec != nullptr) {
+            compute(out, in, num_parallel_copies_of_circuit_not_threads, rep_exec);
+            return;
         }
-        for (uint i = 0; i < NUM_THREADS; i++) {
-            threads[i].join();
-        }
+
+        // Fallback: preserve legacy behavior if no lane context was bound.
+        assert(rep_execs != nullptr);
+        assert(NUM_THREADS > 0);
+        compute(out, in, num_parallel_copies_of_circuit_not_threads, rep_execs[0]);
     }
 
     template<typename Circ_exec>

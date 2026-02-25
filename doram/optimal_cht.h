@@ -15,9 +15,17 @@ namespace optimalcht {
 using namespace thread_unsafe;
 
 // Set me in main!
-sh_riro::Circuit* lookup_circuit;
+inline thread_local sh_riro::Circuit* lookup_circuit = nullptr;
 
-double time_in_circuit, time_before_circuit, time_after_circuit;
+#if DORAM_TIMING_ENABLED
+inline thread_local double time_in_circuit = 0;
+inline thread_local double time_before_circuit = 0;
+inline thread_local double time_after_circuit = 0;
+#else
+inline double time_in_circuit = 0;
+inline double time_before_circuit = 0;
+inline double time_after_circuit = 0;
+#endif
 // some special values that fit into a uint
 // as signed ints, these are -1, -2, -3, etc
 const uint NONE = -1;
@@ -157,7 +165,7 @@ uint lookup_from_2shares (block* table_2share, block key, uint log_single_col_le
     }
     circuit_input.from_2shares(prev_party(builder), next_party(builder), lookup_values);
     circuit_input.copy_one(3, dummy_index, 0);
-    time_before_circuit = time_from(start);
+    DORAM_TIMING_SET(time_before_circuit, time_from(start));
 
 /* circuit input format (4 blocks)
 key | lookup_value_0 | lookup_value_1 | (dummy_index | 96b unused)
@@ -170,7 +178,7 @@ output format (1 block)
         throw std::runtime_error("optimalcht::lookup_circuit is not initialized");
     }
     lookup_circuit->compute(circuit_input, circuit_output);
-    time_in_circuit = time_from(start);
+    DORAM_TIMING_SET(time_in_circuit, time_from(start));
     start = clock_start();
     block ret;
     circuit_output.reveal_to(prev_party(builder), &ret);
@@ -178,7 +186,7 @@ output format (1 block)
     found.copy_bytes_from(circuit_output, 1, 4);
     circuit_input.destroy();
     circuit_output.destroy();
-    time_after_circuit = time_from(start);
+    DORAM_TIMING_SET(time_after_circuit, time_from(start));
     uint* ret_32s = (uint*)(&ret);
     return ret_32s[0];
 }

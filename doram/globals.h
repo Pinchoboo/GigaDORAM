@@ -2,6 +2,7 @@
 
 #include "emp-tool/emp-tool.h"
 #include "rep_net_io_channel.h"
+#include "timing_mode.h"
 #include <thread>
 #include <map> 
 
@@ -76,17 +77,31 @@ fstream timing_file;
 fstream special_debug_file;
 
 // ignore setup
-double time_total = 0;         
-vector<double> time_total_builds;
-double time_total_build_prf = 0;
-double time_total_batcher = 0;
-double time_total_deletes = 0; 
-double time_total_queries = 0;
-double time_total_query_prf = 0;
-double time_total_query_stupid = 0;
-double time_total_shuffles = 0;
-double time_total_cht_build = 0;
-double time_total_transpose = 0;
+#if DORAM_TIMING_ENABLED
+inline thread_local double time_total = 0;
+inline thread_local vector<double> time_total_builds;
+inline thread_local double time_total_build_prf = 0;
+inline thread_local double time_total_batcher = 0;
+inline thread_local double time_total_deletes = 0;
+inline thread_local double time_total_queries = 0;
+inline thread_local double time_total_query_prf = 0;
+inline thread_local double time_total_query_stupid = 0;
+inline thread_local double time_total_shuffles = 0;
+inline thread_local double time_total_cht_build = 0;
+inline thread_local double time_total_transpose = 0;
+#else
+inline double time_total = 0;
+inline vector<double> time_total_builds;
+inline double time_total_build_prf = 0;
+inline double time_total_batcher = 0;
+inline double time_total_deletes = 0;
+inline double time_total_queries = 0;
+inline double time_total_query_prf = 0;
+inline double time_total_query_stupid = 0;
+inline double time_total_shuffles = 0;
+inline double time_total_cht_build = 0;
+inline double time_total_transpose = 0;
+#endif
 
 // The following timings are not thread safe and commented out for now
 /*
@@ -98,7 +113,11 @@ double time_main_loop = 0;
 
 // double time_total_network = 0; // defined in rep_net_io to avoid include problem, can still be accessed globaly
 
-double time_doram_constructor = 0; //? what is this for?
+#if DORAM_TIMING_ENABLED
+inline thread_local double time_doram_constructor = 0; //? what is this for?
+#else
+inline double time_doram_constructor = 0; //? what is this for?
+#endif
 
 typedef unsigned long long ull;
 

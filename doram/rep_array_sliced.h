@@ -65,7 +65,7 @@ public:
         auto start = clock_start();
         sse_trans((uint8_t*)prev, (uint8_t*)(unsliced.prev), slice_sz_bits(), input_length_slices);
         sse_trans((uint8_t*)next, (uint8_t*)(unsliced.next), slice_sz_bits(), input_length_slices);
-        time_total_transpose += time_from(start);
+        DORAM_TIMING_ADD(time_total_transpose, time_from(start));
 
         // todo: patch in bit_transpose_block for larger sizes
     }
@@ -86,7 +86,7 @@ public:
         auto start = clock_start();
         sse_trans((uint8_t*)(unsliced.prev), (uint8_t*)prev, length_slices, slice_sz_bits());
         sse_trans((uint8_t*)(unsliced.next), (uint8_t*)next, length_slices, slice_sz_bits());
-        time_total_transpose += time_from(start);
+        DORAM_TIMING_ADD(time_total_transpose, time_from(start));
 
         // todo: patch in bit_transpose_block for larger sizes
     }

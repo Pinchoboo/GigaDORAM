@@ -18,10 +18,15 @@ using namespace std;
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "timing_mode.h"
 
 namespace emp
 {
-double time_total_network = 0;
+#if DORAM_TIMING_ENABLED
+inline thread_local double time_total_network = 0;
+#else
+inline double time_total_network = 0;
+#endif
 class RepSubChannel
 {
   public:
@@ -90,7 +95,7 @@ class RepSenderSubChannel : public RepSubChannel
         while (sent < len)
         {
             // int res = fwrite(sent + (char *)data, 1, len - sent, stream);
-            int res = write(sock, sent + (char *)data, len);
+            int res = write(sock, sent + (char *)data, len - sent);
             if (res >= 0)
                 sent += res;
             // else //!we wait here, like, a lot.
@@ -294,7 +299,7 @@ class RepNetIO : public IOChannel<RepNetIO>
     {
         auto _start = clock_start();
         schannel->flush();
-        time_total_network += time_from(_start);
+        DORAM_TIMING_ADD(time_total_network, time_from(_start));
     }
 
     void send_data_internal(const void *data, int len)
@@ -302,8 +307,8 @@ class RepNetIO : public IOChannel<RepNetIO>
         auto _start = clock_start();
         schannel->send_data(data, len);
         double time_spent = time_from(_start);
-        time_in_send += time_spent;
-        time_total_network += time_spent;
+        DORAM_TIMING_ADD(time_in_send, time_spent);
+        DORAM_TIMING_ADD(time_total_network, time_spent);
     }
 
     void recv_data_internal(void *data, int len)
@@ -311,8 +316,8 @@ class RepNetIO : public IOChannel<RepNetIO>
         auto _start = clock_start();
         rchannel->recv_data(data, len);
         double time_spent = time_from(_start);
-        time_in_recv += time_spent;
-        time_total_network += time_spent;
+        DORAM_TIMING_ADD(time_in_recv, time_spent);
+        DORAM_TIMING_ADD(time_total_network, time_spent);
     }
 };
 

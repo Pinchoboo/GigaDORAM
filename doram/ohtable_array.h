@@ -1,6 +1,8 @@
 #pragma once
 
 #include <vector>
+#include <stdexcept>
+#include <string>
 #include "emp-tool/emp-tool.h"
 #include "optimal_cht.h"
 #include "sh_shuffle_array.h"
@@ -22,7 +24,17 @@ uint prf_key_size_blocks() {
     return prf_circuit->num_input/bits_per_block - 1;
 }
 
-double time_before_cht, time_in_cht, time_after_cht, time_ite;
+#if DORAM_TIMING_ENABLED
+inline thread_local double time_before_cht = 0;
+inline thread_local double time_in_cht = 0;
+inline thread_local double time_after_cht = 0;
+inline thread_local double time_ite = 0;
+#else
+inline double time_before_cht = 0;
+inline double time_in_cht = 0;
+inline double time_after_cht = 0;
+inline double time_ite = 0;
+#endif
 
 struct OHTableParams
 {
@@ -171,7 +183,7 @@ public:
         }
         auto start = clock_start();
         prf_circuit->compute_multithreaded(qs_builder_order, keys_and_inputs, params.num_elements);
-        time_total_build_prf += time_from(start);
+        DORAM_TIMING_ADD(time_total_build_prf, time_from(start));
         ArrayShuffler builder_shuffler(params.total_size());
         xs_builder_order.copy_bytes_from(xs, xs.length_bytes);
         ys_builder_order_blocks.copy_bytes_from(
@@ -239,6 +251,13 @@ public:
         vector<uint> stash_indices_receiver(params.stash_size);
         if (party != params.builder) {
             for (uint i = 0; i < params.stash_size; i++) {
+                if (stash_indices_builder[i] >= params.total_size()) {
+                    throw std::runtime_error(
+                        "stash index out of range in build_blocks: stash_indices_builder[" +
+                        std::to_string(i) + "]=" + std::to_string(stash_indices_builder[i]) +
+                        ", total_size=" + std::to_string(params.total_size())
+                    );
+                }
                 stash_indices_receiver[i] = receiver_shuffle->evaluate_at(stash_indices_builder[i]);
             }
         }
@@ -270,7 +289,16 @@ public:
         rep_array_unsliced<block> y_blocks,
         rep_array_unsliced<int> found) {
         using namespace thread_unsafe;
-        assert(query_count < params.num_dummies);
+        if (query_count >= params.num_dummies) {
+            throw std::runtime_error(
+                "query_count out of range in query_blocks: query_count=" +
+                std::to_string(query_count) +
+                ", num_dummies=" + std::to_string(params.num_dummies) +
+                ", total_size=" + std::to_string(params.total_size()) +
+                ", party=" + std::to_string(party) +
+                ", builder=" + std::to_string(params.builder)
+            );
+        }
         assert(q.length_Ts() == 1);
         assert(y_blocks.length_Ts() == y_blocks_count_for_rows(1));
         auto start = clock_start();
@@ -279,7 +307,7 @@ public:
         dummy.fill_random();
         auto start_ite = clock_start();
         rep_exec->if_then_else(use_dummy, dummy, q, q_or_dummy);
-        time_ite = time_from(start_ite);
+        DORAM_TIMING_SET(time_ite, time_from(start_ite));
 
         block q_clear;
         // this is the correct order, other way is ~1 round slower
@@ -291,15 +319,29 @@ public:
 
         rep_array_unsliced<uint> dummy_index(1);
         dummy_index.copy_one(0, dummy_indices, query_count);
-        time_before_cht = time_from(start);
+        DORAM_TIMING_SET(time_before_cht, time_from(start));
         start = clock_start();
         uint index_builder_order = optimalcht::lookup_from_2shares(cht_2shares, q_clear, params.cht_log_single_col_len, 
             dummy_index, found, params.builder);
-        time_in_cht = time_from(start);
+        DORAM_TIMING_SET(time_in_cht, time_from(start));
 
         start = clock_start();
         uint index_receiver_order;
         if (party != params.builder) {
+            if (receiver_shuffle == nullptr) {
+                throw std::runtime_error("receiver_shuffle is null in query_blocks");
+            }
+            if (index_builder_order >= params.total_size()) {
+                throw std::runtime_error(
+                    "lookup index out of range in query_blocks: index_builder_order=" +
+                    std::to_string(index_builder_order) +
+                    ", total_size=" + std::to_string(params.total_size()) +
+                    ", query_count=" + std::to_string(query_count) +
+                    ", num_dummies=" + std::to_string(params.num_dummies) +
+                    ", party=" + std::to_string(party) +
+                    ", builder=" + std::to_string(params.builder)
+                );
+            }
             index_receiver_order = receiver_shuffle->evaluate_at(index_builder_order);
         }
 
@@ -329,7 +371,7 @@ public:
             runtime_width_spec
         );
         query_count++;
-        time_after_cht = time_from(start);
+        DORAM_TIMING_SET(time_after_cht, time_from(start));
     }
 
     void extract_blocks(
